@@ -1,6 +1,14 @@
-# Manga Chapter Tracker (v0.1)
+# Manga Chapter Tracker (v0.1.1)
 
 A Chrome extension that tracks which chapter you're on across manga sites, in one unified library. This is the Phase 0 + Phase 1 MVP from the case study: manual save, local storage, two sites (MangaRead and NatoManga).
+
+## About this project
+
+Manga readers follow dozens to hundreds of ongoing series, each updating on its own schedule. The web's default tool for "remember where I was" is the browser bookmark, which was never built for it: bookmarks are flat, static, carry no reading state, and can't span the separate bookmark tools that each manga site ships. The pain scales badly. The reader who inspired this had over 3,000 bookmarks across multiple sites.
+
+This extension reframes the problem around the reader's actual job: instantly see and return to the exact chapter you left off on, across every site, with no manual upkeep. The enabling insight is that the chapter number already lives in the page URL, so the tool can read your position directly instead of scraping pages, which keeps the interface to a single tap.
+
+It started as a self-initiated UX project. The full problem definition, research, design decisions, and rationale are written up in [the UX case study](./Manga%20Bookmark%20Extension%20-%20UX%20Case%20Study.md). This repo is the working build of that v1 concept.
 
 ## Load it in Chrome (2 minutes)
 
