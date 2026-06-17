@@ -219,11 +219,28 @@ h1 {
 /* Footer with Export / Import. */
 .footer {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 14px;
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--surface-2);
+}
+
+.auth-area,
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-status {
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .link-btn {

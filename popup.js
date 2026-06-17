@@ -6,6 +6,7 @@
 
 import { parseChapterUrl } from "./parser.js";
 import { getAll, getOne, upsert, remove, importRecords } from "./storage.js";
+import { getSession, getUserEmail, signInWithGoogle, signOut } from "./auth.js";
 
 // Elements.
 const saveInfo = document.getElementById("saveInfo");
@@ -21,6 +22,8 @@ const toastEl = document.getElementById("toast");
 const exportBtn = document.getElementById("exportBtn");
 const importBtn = document.getElementById("importBtn");
 const importFile = document.getElementById("importFile");
+const authStatus = document.getElementById("authStatus");
+const authBtn = document.getElementById("authBtn");
 
 const ROW_H = 56; // must match --row-h in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
@@ -268,10 +271,46 @@ function debounce(fn, ms) {
   };
 }
 
+// --- Auth (sign in / out) -------------------------------------------------
+
+async function refreshAuthUI() {
+  const session = await getSession();
+  if (session) {
+    const email = getUserEmail(session);
+    authStatus.textContent = email ? `Signed in: ${email}` : "Signed in";
+    authStatus.title = authStatus.textContent;
+    authBtn.textContent = "Sign out";
+  } else {
+    authStatus.textContent = "Sign in to sync";
+    authStatus.title = "";
+    authBtn.textContent = "Sign in";
+  }
+}
+
+authBtn.addEventListener("click", async () => {
+  authBtn.disabled = true;
+  try {
+    const session = await getSession();
+    if (session) {
+      await signOut();
+      showToast("Signed out");
+    } else {
+      const next = await signInWithGoogle();
+      showToast(`Signed in as ${getUserEmail(next) || "user"}`);
+    }
+  } catch (err) {
+    showToast("Auth error: " + (err?.message || "failed"));
+  } finally {
+    authBtn.disabled = false;
+    refreshAuthUI();
+  }
+});
+
 // Re-filter as the user types (debounced) or changes the sort.
 searchInput.addEventListener("input", debounce(computeView, 150));
 sortSelect.addEventListener("change", computeView);
 
 // Initial paint.
 refreshSaveArea();
+refreshAuthUI();
 load();

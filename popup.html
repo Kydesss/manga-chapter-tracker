@@ -38,16 +38,22 @@
 
     <!-- Backup controls. -->
     <footer class="footer">
-      <button id="exportBtn" class="link-btn" type="button">Export</button>
-      <button id="importBtn" class="link-btn" type="button">Import</button>
-      <input
-        id="importFile"
-        type="file"
-        accept="application/json,.json"
-        class="visually-hidden"
-        aria-hidden="true"
-        tabindex="-1"
-      />
+      <span class="auth-area">
+        <span id="authStatus" class="auth-status" aria-live="polite">Sign in to sync</span>
+        <button id="authBtn" class="link-btn" type="button">Sign in</button>
+      </span>
+      <span class="footer-actions">
+        <button id="exportBtn" class="link-btn" type="button">Export</button>
+        <button id="importBtn" class="link-btn" type="button">Import</button>
+        <input
+          id="importFile"
+          type="file"
+          accept="application/json,.json"
+          class="visually-hidden"
+          aria-hidden="true"
+          tabindex="-1"
+        />
+      </span>
     </footer>
 
     <!-- Brief confirmation messages. aria-live so screen readers announce them. -->
