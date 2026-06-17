@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Manga Tracker</h1>
+      <span id="count" class="count"></span>
+    </header>
+
+    <!-- Save area: reflects the current tab. -->
+    <section id="saveArea" class="save-area">
+      <div id="saveInfo" class="save-info">Checking this page...</div>
+      <button id="saveBtn" class="save-btn" disabled>Save chapter</button>
+    </section>
+
+    <!-- Controls for the library. -->
+    <div class="controls">
+      <input id="search" type="search" placeholder="Search series..." />
+      <select id="sort">
+        <option value="recent">Recently read</option>
+        <option value="title">Title (A-Z)</option>
+      </select>
+    </div>
+
+    <!-- The library list is rendered here by popup.js. -->
+    <ul id="list" class="list"></ul>
+    <p id="empty" class="empty" hidden>No series saved yet. Open a chapter and hit Save.</p>
+
+    <!-- Brief confirmation messages appear here. -->
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
