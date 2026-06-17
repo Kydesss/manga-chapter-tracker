@@ -1,6 +1,8 @@
-# Manga Chapter Tracker (v0.1.2)
+# Manga Chapter Tracker
 
-A Chrome extension that tracks which chapter you're on across manga sites, in one unified library. This is the Phase 0 + Phase 1 MVP from the case study: manual save, local storage, two sites (MangaRead and NatoManga).
+A Chrome extension that tracks which chapter you're on across manga sites, in one unified library. Save the chapter you're reading with one click, then search, sort, and jump back to any series from a single popup. Works offline with local storage, and currently supports MangaRead and NatoManga.
+
+For the version history and what changed in each release, see [CHANGELOG.md](./CHANGELOG.md).
 
 ## About this project
 
@@ -8,7 +10,7 @@ Manga readers follow dozens to hundreds of ongoing series, each updating on its 
 
 This extension reframes the problem around the reader's actual job: instantly see and return to the exact chapter you left off on, across every site, with no manual upkeep. The enabling insight is that the chapter number already lives in the page URL, so the tool can read your position directly instead of scraping pages, which keeps the interface to a single tap.
 
-It started as a self-initiated UX project. The full problem definition, research, design decisions, and rationale are written up in [the UX case study](./Manga%20Bookmark%20Extension%20-%20UX%20Case%20Study.md). This repo is the working build of that v1 concept.
+It started as a self-initiated UX project. The full problem definition, research, design decisions, and rationale are written up in [the UX case study](./Manga%20Bookmark%20Extension%20-%20UX%20Case%20Study.md). This repo is the working build of that concept.
 
 ## Load it in Chrome (2 minutes)
 
@@ -22,7 +24,7 @@ To try it: open any chapter, for example `https://www.mangaread.org/manga/blue-l
 
 ## What each file does
 
-`manifest.json` is the extension's config. It declares the name, the permissions we need (`storage` to save data, `activeTab` to read the URL of the tab you're on when you click the icon, `unlimitedStorage` so thousands of series fit), and that clicking the toolbar icon opens `popup.html`. There is deliberately no background service worker: because saving is manual and only happens while the popup is open, the popup does all the work itself. That keeps v1 simple.
+`manifest.json` is the extension's config. It declares the name, the permissions we need (`storage` to save data, `activeTab` to read the URL of the tab you're on when you click the icon, `unlimitedStorage` so thousands of series fit), and that clicking the toolbar icon opens `popup.html`. There is deliberately no background service worker: because saving is manual and only happens while the popup is open, the popup does all the work itself. That keeps the extension simple.
 
 `parser.js` is the core of the product. `parseChapterUrl(url)` takes a URL string and returns a structured record (`{ id, site, title, chapter, chapterUrl, seriesUrl, ... }`) or `null` if it isn't a supported chapter page. The key idea: the chapter number is already in the URL, so one regex extracts everything. The record `id` is `site:slug` (for example `mangaread.org:blue-lock`), which is what makes saving an **upsert**: save the same series again and it updates in place instead of creating a duplicate. To support a new site, add one entry to the `SITES` array, as long as it uses the same `/manga/{slug}/chapter-{number}` shape.
 
@@ -52,9 +54,11 @@ To try it: open any chapter, for example `https://www.mangaread.org/manga/blue-l
 
 The parser was tested against real URLs from both sites, including decimal chapters (`chapter-83-2` displays as `83.2`), the no-`www` form, and non-chapter pages (series pages, home pages, unsupported sites) which correctly return `null`. See `test-parser.mjs` notes in the project history if you want to re-run with Node.
 
-## What's next (later phases)
+## Roadmap
 
-- **Phase 2 polish:** virtualized list for very large libraries, better empty/loading states.
-- **Phase 3 cloud accounts:** optional sign-in with last-write-wins sync (Supabase is the planned backend), so the library follows you across devices.
-- **Phase 4:** bulk-import existing browser bookmarks, real series titles via a content script, cover images.
-- **Later:** quiet, opt-in "new chapter" detection surfaced inside the popup only, with a per-series toggle, never as an OS notification by default.
+Planned directions, roughly in priority order. Shipped work lives in the [changelog](./CHANGELOG.md).
+
+- Optional cloud accounts with cross-device sync (last-write-wins).
+- Bulk import of existing browser bookmarks, filtered to supported sites.
+- Support for more manga sites and richer series metadata (real titles, cover images).
+- Quiet, opt-in "new chapter" detection surfaced inside the popup, with a per-series toggle and never as an OS notification by default.
