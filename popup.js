@@ -7,6 +7,7 @@
 import { parseChapterUrl } from "./parser.js";
 import { getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signInWithGoogle, signOut } from "./auth.js";
+import { syncNow } from "./sync.js";
 
 // Elements.
 const saveInfo = document.getElementById("saveInfo");
@@ -99,6 +100,7 @@ saveBtn.addEventListener("click", async () => {
   showToast(`Saved ${pending.title} - ch. ${pending.chapter}`);
   await load();
   await refreshSaveArea();
+  runSync(); // push this save to the cloud if signed in (fire and forget)
 });
 
 // --- Data load + view computation -----------------------------------------
@@ -297,6 +299,7 @@ authBtn.addEventListener("click", async () => {
     } else {
       const next = await signInWithGoogle();
       showToast(`Signed in as ${getUserEmail(next) || "user"}`);
+      runSync(); // first sync: merge local with the cloud
     }
   } catch (err) {
     showToast("Auth error: " + (err?.message || "failed"));
@@ -306,11 +309,27 @@ authBtn.addEventListener("click", async () => {
   }
 });
 
+// Run a sync pass (when signed in), then reflect any pulled changes in the UI.
+async function runSync(opts = {}) {
+  const session = await getSession();
+  if (!session) return;
+  authStatus.textContent = "Syncing...";
+  const res = await syncNow(opts);
+  if (res?.ok) {
+    await load();
+    await refreshSaveArea();
+  } else if (res?.error) {
+    showToast("Sync error: " + res.error);
+  }
+  refreshAuthUI();
+}
+
 // Re-filter as the user types (debounced) or changes the sort.
 searchInput.addEventListener("input", debounce(computeView, 150));
 sortSelect.addEventListener("change", computeView);
 
-// Initial paint.
+// Initial paint, then a throttled sync on open (no-op when signed out).
 refreshSaveArea();
 refreshAuthUI();
 load();
+runSync({ throttle: true });

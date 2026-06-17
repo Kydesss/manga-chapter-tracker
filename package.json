@@ -1,0 +1,10 @@
+{
+  "name": "manga-chapter-tracker",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension that tracks your current chapter across manga sites.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
