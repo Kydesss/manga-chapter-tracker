@@ -1,93 +1,175 @@
 // popup.js
-// Ties everything together: reads the active tab, lets the user save it, and
-// renders the searchable/sortable library. Loaded as an ES module so it can
-// import the parser and storage helpers.
+// Ties everything together: reads the active tab, lets the user save it (with
+// awareness of what's already saved), and renders a virtualized, searchable,
+// sortable library that stays fast at thousands of entries. Also handles
+// JSON export/import for backup. Loaded as an ES module.
 
 import { parseChapterUrl } from "./parser.js";
-import { getAll, upsert, remove } from "./storage.js";
+import { getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 
-// Grab the elements we interact with.
+// Elements.
 const saveInfo = document.getElementById("saveInfo");
 const saveBtn = document.getElementById("saveBtn");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
-const listEl = document.getElementById("list");
+const scroller = document.getElementById("scroller");
+const sizer = document.getElementById("sizer");
 const emptyEl = document.getElementById("empty");
+const noResultsEl = document.getElementById("noResults");
 const countEl = document.getElementById("count");
 const toastEl = document.getElementById("toast");
+const exportBtn = document.getElementById("exportBtn");
+const importBtn = document.getElementById("importBtn");
+const importFile = document.getElementById("importFile");
 
-// `pending` holds the parsed record for the current tab (or null if the tab
-// is not a supported chapter page). It's what the Save button commits.
-let pending = null;
+const ROW_H = 56; // must match --row-h in popup.css
+const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
-// --- Active tab detection -------------------------------------------------
+let pending = null; // parsed record for the current tab, or null
+let allRecords = []; // every saved series (source of truth in memory)
+let filtered = []; // current search/sort view, the array we virtualize
+
+// --- Active tab + already-saved awareness ---------------------------------
 
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
 }
 
-// Inspect the current tab and update the save area accordingly.
+// Compare two chapter labels ("83.2", "246") numerically. Returns -1/0/1.
+function compareChapters(a, b) {
+  const na = parseFloat(a);
+  const nb = parseFloat(b);
+  if (Number.isNaN(na) || Number.isNaN(nb)) return a === b ? 0 : NaN;
+  return Math.sign(na - nb);
+}
+
 async function refreshSaveArea() {
   const tab = await getActiveTab();
   pending = tab?.url ? parseChapterUrl(tab.url) : null;
 
-  if (pending) {
-    saveInfo.innerHTML = `<strong>${escapeHtml(pending.title)}</strong><br>Chapter ${escapeHtml(
-      pending.chapter
-    )} on ${escapeHtml(pending.siteName)}`;
-    saveBtn.disabled = false;
-    saveBtn.textContent = "Save chapter";
-  } else {
+  if (!pending) {
     saveInfo.textContent =
       "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
     saveBtn.disabled = true;
+    return;
   }
+
+  // Is this series already tracked? Show the relationship so a save is never
+  // a surprise overwrite.
+  const existing = await getOne(pending.id);
+  let note = "";
+  if (existing) {
+    const dir = compareChapters(pending.chapter, existing.chapter);
+    if (dir === 0) {
+      note = `<div class="save-note same">Already saved at chapter ${escapeHtml(
+        existing.chapter
+      )}.</div>`;
+      saveBtn.textContent = "Save again";
+    } else if (dir > 0) {
+      note = `<div class="save-note advance">Saved: chapter ${escapeHtml(
+        existing.chapter
+      )} &rarr; will advance to ${escapeHtml(pending.chapter)}.</div>`;
+      saveBtn.textContent = "Update chapter";
+    } else {
+      note = `<div class="save-note back">Saved: chapter ${escapeHtml(
+        existing.chapter
+      )}. This would move you back to ${escapeHtml(pending.chapter)}.</div>`;
+      saveBtn.textContent = "Update chapter";
+    }
+  } else {
+    saveBtn.textContent = "Save chapter";
+  }
+
+  saveInfo.innerHTML =
+    `<strong>${escapeHtml(pending.title)}</strong><br>Chapter ${escapeHtml(
+      pending.chapter
+    )} on ${escapeHtml(pending.siteName)}` + note;
+  saveBtn.disabled = false;
 }
 
 // --- Saving ---------------------------------------------------------------
 
 saveBtn.addEventListener("click", async () => {
   if (!pending) return;
-  // Re-stamp the time at the moment of saving.
   await upsert({ ...pending, updatedAt: new Date().toISOString() });
   showToast(`Saved ${pending.title} - ch. ${pending.chapter}`);
-  await render();
+  await load();
+  await refreshSaveArea();
 });
 
-// --- Rendering the library ------------------------------------------------
+// --- Data load + view computation -----------------------------------------
 
-async function render() {
-  const all = await getAll();
-  countEl.textContent = all.length ? `${all.length} series` : "";
+async function load() {
+  allRecords = await getAll();
+  computeView();
+}
 
+function computeView() {
   const query = searchInput.value.trim().toLowerCase();
-  let items = query
-    ? all.filter((r) => r.title.toLowerCase().includes(query))
-    : all;
+  filtered = query
+    ? allRecords.filter((r) => r.title.toLowerCase().includes(query))
+    : allRecords.slice();
 
   if (sortSelect.value === "title") {
-    items.sort((a, b) => a.title.localeCompare(b.title));
+    filtered.sort((a, b) => a.title.localeCompare(b.title));
   } else {
-    items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    filtered.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
   }
 
-  listEl.innerHTML = "";
-  emptyEl.hidden = all.length > 0;
+  // Header count + empty/no-results messaging.
+  countEl.textContent = allRecords.length ? `${allRecords.length} series` : "";
+  emptyEl.hidden = allRecords.length > 0;
+  noResultsEl.hidden = !(allRecords.length > 0 && filtered.length === 0);
 
-  for (const r of items) {
-    listEl.appendChild(renderItem(r));
+  // Re-virtualize from the top whenever the dataset/view changes.
+  sizer.style.height = filtered.length * ROW_H + "px";
+  scroller.scrollTop = 0;
+  renderWindow();
+}
+
+// --- Virtualized rendering -------------------------------------------------
+
+function renderWindow() {
+  const scrollTop = scroller.scrollTop;
+  const viewport = scroller.clientHeight || 340;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const visibleCount = Math.ceil(viewport / ROW_H) + OVERSCAN * 2;
+  const end = Math.min(filtered.length, start + visibleCount);
+
+  sizer.replaceChildren();
+  for (let i = start; i < end; i++) {
+    const row = renderItem(filtered[i]);
+    row.style.top = i * ROW_H + "px";
+    sizer.appendChild(row);
   }
 }
 
-function renderItem(r) {
-  const li = document.createElement("li");
-  li.className = "item";
-  li.title = "Open chapter " + r.chapter;
+// Throttle scroll handling to one render per animation frame.
+let rafPending = false;
+scroller.addEventListener("scroll", () => {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => {
+    rafPending = false;
+    renderWindow();
+  });
+});
 
-  // Clicking the row opens the saved chapter in a new tab.
-  li.addEventListener("click", () => {
-    chrome.tabs.create({ url: r.chapterUrl });
+function renderItem(r) {
+  const row = document.createElement("div");
+  row.className = "item";
+  row.setAttribute("role", "listitem");
+  row.tabIndex = 0; // keyboard focusable
+  row.setAttribute("aria-label", `${r.title}, chapter ${r.chapter}, ${r.siteName}`);
+
+  const open = () => chrome.tabs.create({ url: r.chapterUrl });
+  row.addEventListener("click", open);
+  row.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      open();
+    }
   });
 
   const main = document.createElement("div");
@@ -106,17 +188,57 @@ function renderItem(r) {
 
   const del = document.createElement("button");
   del.className = "delete-btn";
-  del.textContent = "x";
+  del.textContent = "×"; // multiplication sign as a tidy close glyph
+  del.setAttribute("aria-label", `Remove ${r.title} from library`);
   del.title = "Remove from library";
   del.addEventListener("click", async (e) => {
-    e.stopPropagation(); // don't trigger the row's open handler
+    e.stopPropagation();
     await remove(r.id);
-    await render();
+    await load();
+    showToast(`Removed ${r.title}`);
   });
 
-  li.append(main, badge, del);
-  return li;
+  row.append(main, badge, del);
+  return row;
 }
+
+// --- Export / Import -------------------------------------------------------
+
+exportBtn.addEventListener("click", async () => {
+  const data = await getAll();
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `manga-tracker-backup-${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${data.length} series`);
+});
+
+importBtn.addEventListener("click", () => importFile.click());
+
+importFile.addEventListener("change", async () => {
+  const file = importFile.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const records = JSON.parse(text);
+    const result = await importRecords(records);
+    await load();
+    showToast(
+      `Imported: ${result.added} new, ${result.updated} updated` +
+        (result.skipped ? `, ${result.skipped} skipped` : "")
+    );
+  } catch (err) {
+    showToast("Import failed: " + (err?.message || "invalid file"));
+  } finally {
+    importFile.value = ""; // allow re-importing the same file
+  }
+});
 
 // --- Helpers --------------------------------------------------------------
 
@@ -125,13 +247,11 @@ function showToast(msg) {
   toastEl.textContent = msg;
   toastEl.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (toastEl.hidden = true), 1800);
+  toastTimer = setTimeout(() => (toastEl.hidden = true), 2000);
 }
 
-// Prevent any odd characters in titles from breaking the markup we set via
-// innerHTML in the save area.
 function escapeHtml(str) {
-  return str.replace(/[&<>"']/g, (c) => ({
+  return String(str).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
@@ -140,10 +260,18 @@ function escapeHtml(str) {
   }[c]));
 }
 
-// Re-render the list as the user types or changes the sort.
-searchInput.addEventListener("input", render);
-sortSelect.addEventListener("change", render);
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+// Re-filter as the user types (debounced) or changes the sort.
+searchInput.addEventListener("input", debounce(computeView, 150));
+sortSelect.addEventListener("change", computeView);
 
 // Initial paint.
 refreshSaveArea();
-render();
+load();

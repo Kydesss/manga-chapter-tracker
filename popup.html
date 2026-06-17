@@ -7,30 +7,51 @@
   <body>
     <header>
       <h1>Manga Tracker</h1>
-      <span id="count" class="count"></span>
+      <span id="count" class="count" aria-live="polite"></span>
     </header>
 
     <!-- Save area: reflects the current tab. -->
-    <section id="saveArea" class="save-area">
+    <section id="saveArea" class="save-area" aria-label="Save current chapter">
       <div id="saveInfo" class="save-info">Checking this page...</div>
       <button id="saveBtn" class="save-btn" disabled>Save chapter</button>
     </section>
 
     <!-- Controls for the library. -->
     <div class="controls">
+      <label for="search" class="visually-hidden">Search series</label>
       <input id="search" type="search" placeholder="Search series..." />
-      <select id="sort">
+      <label for="sort" class="visually-hidden">Sort series</label>
+      <select id="sort" aria-label="Sort series">
         <option value="recent">Recently read</option>
         <option value="title">Title (A-Z)</option>
       </select>
     </div>
 
-    <!-- The library list is rendered here by popup.js. -->
-    <ul id="list" class="list"></ul>
-    <p id="empty" class="empty" hidden>No series saved yet. Open a chapter and hit Save.</p>
+    <!-- Virtualized library: only visible rows are rendered into #sizer. -->
+    <div id="scroller" class="scroller" role="list" aria-label="Saved series">
+      <div id="sizer" class="sizer"></div>
+    </div>
+    <p id="empty" class="empty" hidden>
+      No series saved yet. Open a chapter and hit Save.
+    </p>
+    <p id="noResults" class="empty" hidden>No series match your search.</p>
 
-    <!-- Brief confirmation messages appear here. -->
-    <div id="toast" class="toast" hidden></div>
+    <!-- Backup controls. -->
+    <footer class="footer">
+      <button id="exportBtn" class="link-btn" type="button">Export</button>
+      <button id="importBtn" class="link-btn" type="button">Import</button>
+      <input
+        id="importFile"
+        type="file"
+        accept="application/json,.json"
+        class="visually-hidden"
+        aria-hidden="true"
+        tabindex="-1"
+      />
+    </footer>
+
+    <!-- Brief confirmation messages. aria-live so screen readers announce them. -->
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
     <script type="module" src="popup.js"></script>
   </body>

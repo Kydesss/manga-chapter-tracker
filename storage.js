@@ -23,6 +23,12 @@ export async function getAll() {
   return Object.values(map);
 }
 
+// Look up a single series by id (used to show "already saved" state).
+export async function getOne(id) {
+  const map = await readMap();
+  return map[id] || null;
+}
+
 // Insert a new series or update an existing one in place (matched by id).
 // If the series already exists we preserve its original createdAt.
 export async function upsert(record) {
@@ -47,4 +53,40 @@ export async function remove(id) {
 export async function count() {
   const map = await readMap();
   return Object.keys(map).length;
+}
+
+// Merge an array of records into storage. Used by Import.
+// Conflicts resolve last-write-wins by updatedAt, which is the same rule the
+// planned cloud sync will use, so this code carries forward into Phase 3.
+// Returns a small summary for user feedback.
+export async function importRecords(records) {
+  if (!Array.isArray(records)) {
+    throw new Error("Import data must be an array of series records.");
+  }
+  const map = await readMap();
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const rec of records) {
+    // Validate the minimum shape so a bad file can't poison the store.
+    if (!rec || typeof rec.id !== "string" || typeof rec.chapter !== "string") {
+      skipped++;
+      continue;
+    }
+    const existing = map[rec.id];
+    if (!existing) {
+      map[rec.id] = { ...rec, createdAt: rec.createdAt || rec.updatedAt };
+      added++;
+    } else if ((rec.updatedAt || "") >= (existing.updatedAt || "")) {
+      // Incoming record is newer (or equal): take it, keep original createdAt.
+      map[rec.id] = { ...existing, ...rec, createdAt: existing.createdAt };
+      updated++;
+    } else {
+      skipped++; // existing copy is newer, leave it
+    }
+  }
+
+  await writeMap(map);
+  return { added, updated, skipped, total: Object.keys(map).length };
 }

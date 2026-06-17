@@ -104,19 +104,29 @@ h1 {
   color: var(--text);
 }
 
-.list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* Virtualized list. The scroller is a fixed-height viewport; #sizer is given
+   the full height of all rows so the scrollbar is accurate, but only the rows
+   in view are actually placed in the DOM (absolutely positioned by index). */
+.scroller {
+  height: 340px;
   overflow-y: auto;
-  max-height: 340px;
+  position: relative;
+}
+
+.sizer {
+  position: relative;
+  width: 100%;
 }
 
 .item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--row-h, 56px);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px;
+  padding: 8px 9px;
   border-radius: 8px;
   cursor: pointer;
 }
@@ -185,4 +195,61 @@ h1 {
   padding: 8px;
   border-radius: 8px;
   font-size: 13px;
+}
+
+/* Save-area states: a small line showing what's already saved for this series. */
+.save-note {
+  font-size: 12px;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.save-note.advance {
+  color: #6fd08c; /* green: saving moves you forward */
+}
+
+.save-note.same {
+  color: var(--muted);
+}
+
+.save-note.back {
+  color: var(--danger); /* red: saving would move you backward */
+}
+
+/* Footer with Export / Import. */
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--surface-2);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.link-btn:hover {
+  color: var(--text);
+}
+
+/* Visually hide an element while keeping it available to screen readers. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
 }

@@ -1,4 +1,4 @@
-# Manga Chapter Tracker (v0.1.1)
+# Manga Chapter Tracker (v0.1.2)
 
 A Chrome extension that tracks which chapter you're on across manga sites, in one unified library. This is the Phase 0 + Phase 1 MVP from the case study: manual save, local storage, two sites (MangaRead and NatoManga).
 
