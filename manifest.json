@@ -1,25 +1,25 @@
 {
-  "manifest_version": 3,
-  "name": "Manga Chapter Tracker",
-  "version": "0.2.2",
-  "description": "Track which chapter you're on across manga sites. One library for every series you read.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsROM57YBll0vlzgkpOzoovxic8qQKmJUV7NRDGu+r1+tkWwzruL8KzXTz3VmOpBNINhhbqJV+Il2KyGdskDYraK3boznDFKHcC+Q8rr7zk/N0Nvu/z5hHNowbcr8TMQIGvXqf8i+Z3KQbFV/9fS9Y7nQrnpeAkNLf99/AkBdB9VdwhdSzNW0G8yqXlWdOK8Ne2vnWMW24bg1ZMQGipypBGS0vzYpTfFgHMeWBwRnAzyA/BP/nA8uA8303PMJe7Q8PJe/Gl6KxbMcdLPuzKxzVr80vjM7sIaZEHN7UwRfxIrVFieudfHQCGK5wFgwH0I4yS0qXaclmNiNEWmgBrVYswIDAQAB",
-  "permissions": ["storage", "activeTab", "unlimitedStorage", "identity"],
-  "host_permissions": ["https://fohkznuvisjohcuzelca.supabase.co/*"],
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Manga Chapter Tracker",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+    "manifest_version": 3,
+    "name": "Manga Chapter Tracker",
+    "version": "0.2.2",
+    "description": "Track which chapter you're on across manga sites. One library for every series you read.",
+    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsROM57YBll0vlzgkpOzoovxic8qQKmJUV7NRDGu+r1+tkWwzruL8KzXTz3VmOpBNINhhbqJV+Il2KyGdskDYraK3boznDFKHcC+Q8rr7zk/N0Nvu/z5hHNowbcr8TMQIGvXqf8i+Z3KQbFV/9fS9Y7nQrnpeAkNLf99/AkBdB9VdwhdSzNW0G8yqXlWdOK8Ne2vnWMW24bg1ZMQGipypBGS0vzYpTfFgHMeWBwRnAzyA/BP/nA8uA8303PMJe7Q8PJe/Gl6KxbMcdLPuzKxzVr80vjM7sIaZEHN7UwRfxIrVFieudfHQCGK5wFgwH0I4yS0qXaclmNiNEWmgBrVYswIDAQAB",
+    "permissions": ["storage", "activeTab", "unlimitedStorage", "identity"],
+    "host_permissions": ["https://fohkznuvisjohcuzelca.supabase.co/*"],
+    "icons": {
+        "16": "icons/icon16.png",
+        "32": "icons/icon32.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "Manga Chapter Tracker",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "32": "icons/icon32.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        }
     }
-  }
 }
