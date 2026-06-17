@@ -202,6 +202,7 @@ function renderItem(r) {
     await remove(r.id);
     await load();
     showToast(`Removed ${r.title}`);
+    runSync(); // push the tombstone so the deletion propagates
   });
 
   row.append(main, badge, del);

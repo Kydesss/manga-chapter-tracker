@@ -14,6 +14,11 @@ extension's `manifest.json` version field.
 - Sign-in/out and sync now drive a single, consistent status state instead of a
   transient "Syncing..." string.
 
+### Fixed
+- Deleting a series now triggers a sync immediately, so the tombstone propagates to
+  the cloud (and other devices) instead of waiting for the next sync trigger. Found
+  during live testing.
+
 ## [0.2.1] - 2026-06-17
 
 Cloud accounts and cross-device sync. Local-first is unchanged: the extension
