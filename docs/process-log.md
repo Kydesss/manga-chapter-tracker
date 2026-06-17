@@ -165,6 +165,31 @@ sequence it.
 
 ---
 
+## 10. Live testing: cross-device sync, and a real bug it caught
+
+Joaquin ran the sync feature against the real backend, step by step: save a new series,
+advance a chapter, delete one, then a true cross-device test by loading the extension
+on a separate MacBook with an empty library and signing into the same account.
+
+Two real bugs surfaced only because we tested live, not in unit tests:
+- **Deletes did not sync.** The delete handler never triggered a sync pass, so
+  tombstones sat locally. Fixed by triggering sync on delete.
+- **Sign-in silently failed on macOS.** The Google auth window took focus and Chrome
+  closed the popup mid-flow, destroying its JavaScript before the session was stored.
+  It only "worked" with DevTools attached (which keeps the popup alive). Fixed by moving
+  the OAuth flow into a background service worker so it survives the popup closing.
+
+The cross-device test itself passed cleanly: the Mac pulled all 55 series and correctly
+hid the one that had been deleted (the tombstone was respected).
+
+**Why it mattered.** This is the strongest QA story in the project. Unit tests proved
+the merge logic; live, cross-device testing proved the integration and caught two bugs
+that no amount of mocked testing would have found (a missing trigger and a
+platform-specific UI lifecycle race). Good evidence of testing rigor and of debugging a
+subtle Manifest V3 behavior.
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."

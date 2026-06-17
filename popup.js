@@ -6,7 +6,7 @@
 
 import { parseChapterUrl } from "./parser.js";
 import { getAll, getOne, upsert, remove, importRecords } from "./storage.js";
-import { getSession, getUserEmail, signInWithGoogle, signOut } from "./auth.js";
+import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
 
 // Elements.
@@ -321,8 +321,11 @@ authBtn.addEventListener("click", async () => {
       setSyncState("signedout");
       showToast("Signed out");
     } else {
-      const next = await signInWithGoogle();
-      currentEmail = getUserEmail(next);
+      // Run sign-in in the service worker so it survives the popup closing
+      // (launchWebAuthFlow takes focus and Chrome closes the popup otherwise).
+      const res = await chrome.runtime.sendMessage({ type: "signin" });
+      if (!res?.ok) throw new Error(res?.error || "Sign-in failed");
+      currentEmail = getUserEmail(res.session);
       authBtn.textContent = "Sign out";
       showToast(`Signed in as ${currentEmail || "user"}`);
       await runSync(); // first sync: merge local with the cloud

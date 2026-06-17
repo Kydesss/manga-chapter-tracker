@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.2.3] - 2026-06-17
+
+### Fixed
+- **Sign-in now completes reliably.** The Google OAuth flow runs in a background
+  service worker instead of the popup. Previously the auth window took focus and
+  Chrome closed the popup mid-flow, destroying its JavaScript before the session
+  was stored, so sign-in silently failed (reproducibly on macOS). Found during
+  cross-device live testing.
+
+### Added
+- A background service worker (`background.js`) that handles sign-in/sign-out on
+  behalf of the popup.
+
 ## [0.2.2] - 2026-06-17
 
 ### Added
