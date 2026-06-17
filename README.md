@@ -56,9 +56,7 @@ The parser was tested against real URLs from both sites, including decimal chapt
 
 ## Roadmap
 
-Planned directions, roughly in priority order. Shipped work lives in the [changelog](./CHANGELOG.md).
-
-- Optional cloud accounts with cross-device sync (last-write-wins).
-- Bulk import of existing browser bookmarks, filtered to supported sites.
-- Support for more manga sites and richer series metadata (real titles, cover images).
-- Quiet, opt-in "new chapter" detection surfaced inside the popup, with a per-series toggle and never as an OS notification by default.
+The full product vision and planned themes (brand and design system, series
+bookmarks, bulk import, more sites and richer metadata, live update detection,
+Firefox support, a companion web app, plus sync-hardening and polish backlogs)
+live in [ROADMAP.md](./ROADMAP.md). Shipped work is in the [changelog](./CHANGELOG.md).

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.2.2] - 2026-06-17
+
+### Added
+- **Sync status indicator** in the popup footer: a coloured dot plus label showing
+  "Sign in to sync", "Syncing...", "Synced" (with account email), or
+  "Offline, will sync later". Status is announced for screen readers.
+
+### Changed
+- Sign-in/out and sync now drive a single, consistent status state instead of a
+  transient "Syncing..." string.
+
 ## [0.2.1] - 2026-06-17
 
 Cloud accounts and cross-device sync. Local-first is unchanged: the extension

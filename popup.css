@@ -237,10 +237,41 @@ h1 {
 .auth-status {
   font-size: 12px;
   color: var(--muted);
-  max-width: 150px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Sync status dot: colour encodes state, label sits next to it. */
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+.sync-dot.is-signedout {
+  background: var(--muted);
+}
+
+.sync-dot.is-synced {
+  background: #6fd08c; /* green */
+}
+
+.sync-dot.is-syncing {
+  background: var(--accent); /* purple */
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.sync-dot.is-offline {
+  background: var(--danger); /* red */
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .link-btn {

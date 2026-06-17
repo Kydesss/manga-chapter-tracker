@@ -25,6 +25,7 @@ const importBtn = document.getElementById("importBtn");
 const importFile = document.getElementById("importFile");
 const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
+const syncDot = document.getElementById("syncDot");
 
 const ROW_H = 56; // must match --row-h in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
@@ -273,19 +274,38 @@ function debounce(fn, ms) {
   };
 }
 
-// --- Auth (sign in / out) -------------------------------------------------
+// --- Auth + sync status ---------------------------------------------------
+
+let currentEmail = null;
+
+// Drive the footer status: a coloured dot plus a short label.
+// state: "signedout" | "syncing" | "synced" | "offline"
+function setSyncState(state) {
+  syncDot.className = "sync-dot is-" + state;
+  const dotTitle = { signedout: "Signed out", syncing: "Syncing", synced: "Synced", offline: "Offline" };
+  syncDot.title = dotTitle[state] || "";
+  if (state === "signedout") {
+    authStatus.textContent = "Sign in to sync";
+  } else if (state === "syncing") {
+    authStatus.textContent = "Syncing...";
+  } else if (state === "offline") {
+    authStatus.textContent = "Offline, will sync later";
+  } else {
+    authStatus.textContent = currentEmail ? `Synced: ${currentEmail}` : "Synced";
+  }
+  authStatus.title = authStatus.textContent;
+}
 
 async function refreshAuthUI() {
   const session = await getSession();
   if (session) {
-    const email = getUserEmail(session);
-    authStatus.textContent = email ? `Signed in: ${email}` : "Signed in";
-    authStatus.title = authStatus.textContent;
+    currentEmail = getUserEmail(session);
     authBtn.textContent = "Sign out";
+    setSyncState("synced"); // optimistic resting state; a failed sync flips to offline
   } else {
-    authStatus.textContent = "Sign in to sync";
-    authStatus.title = "";
+    currentEmail = null;
     authBtn.textContent = "Sign in";
+    setSyncState("signedout");
   }
 }
 
@@ -295,33 +315,44 @@ authBtn.addEventListener("click", async () => {
     const session = await getSession();
     if (session) {
       await signOut();
+      currentEmail = null;
+      authBtn.textContent = "Sign in";
+      setSyncState("signedout");
       showToast("Signed out");
     } else {
       const next = await signInWithGoogle();
-      showToast(`Signed in as ${getUserEmail(next) || "user"}`);
-      runSync(); // first sync: merge local with the cloud
+      currentEmail = getUserEmail(next);
+      authBtn.textContent = "Sign out";
+      showToast(`Signed in as ${currentEmail || "user"}`);
+      await runSync(); // first sync: merge local with the cloud
     }
   } catch (err) {
     showToast("Auth error: " + (err?.message || "failed"));
+    refreshAuthUI();
   } finally {
     authBtn.disabled = false;
-    refreshAuthUI();
   }
 });
 
-// Run a sync pass (when signed in), then reflect any pulled changes in the UI.
+// Run a sync pass (when signed in), reflect pulled changes, and update status.
 async function runSync(opts = {}) {
   const session = await getSession();
-  if (!session) return;
-  authStatus.textContent = "Syncing...";
+  if (!session) {
+    setSyncState("signedout");
+    return;
+  }
+  setSyncState("syncing");
   const res = await syncNow(opts);
-  if (res?.ok) {
-    await load();
-    await refreshSaveArea();
+  if (res?.ok || res?.skipped) {
+    if (res?.ok) {
+      await load();
+      await refreshSaveArea();
+    }
+    setSyncState("synced");
   } else if (res?.error) {
+    setSyncState("offline");
     showToast("Sync error: " + res.error);
   }
-  refreshAuthUI();
 }
 
 // Re-filter as the user types (debounced) or changes the sort.
