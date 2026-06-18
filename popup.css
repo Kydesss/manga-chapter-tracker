@@ -1,15 +1,18 @@
 /* popup.css - a compact, readable popup. Width is fixed because Chrome popups
    size to their content. */
 
+/* Shiori palette. Indigo-led, calm (Kindle / Notion / Linear), not anime-streaming.
+   Dark is the default; light follows the OS preference below. */
 :root {
-  --bg: #16161a;
-  --surface: #1f1f25;
-  --surface-2: #2a2a32;
-  --text: #ececf1;
-  --muted: #9a9aa6;
-  --accent: #7c5cff;
+  --bg: #0b1120;
+  --surface: #111827;
+  --surface-2: #1f2937;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --accent: #4f46e5;
   --accent-text: #ffffff;
-  --danger: #ff5c7c;
+  --success: #22c55e;
+  --danger: #f43f5e;
   --radius: 10px;
 }
 
@@ -17,14 +20,15 @@
    full-page app's settings later. All values chosen to keep WCAG AA contrast. */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f6f6f8;
+    --bg: #f8fafc;
     --surface: #ffffff;
-    --surface-2: #e9e9ef;
-    --text: #1b1b22;
-    --muted: #6b6b76;
-    --accent: #6a45ff;
+    --surface-2: #e8edf4;
+    --text: #111827;
+    --muted: #64748b;
+    --accent: #4f46e5;
     --accent-text: #ffffff;
-    --danger: #d23b5c;
+    --success: #16a34a;
+    --danger: #dc2626;
   }
 }
 
@@ -220,7 +224,7 @@ h1 {
 }
 
 .save-note.advance {
-  color: #6fd08c; /* green: saving moves you forward */
+  color: var(--success); /* green: saving moves you forward */
 }
 
 .save-note.same {
@@ -272,7 +276,7 @@ h1 {
 }
 
 .sync-dot.is-synced {
-  background: #6fd08c; /* green */
+  background: var(--success); /* green */
 }
 
 .sync-dot.is-syncing {

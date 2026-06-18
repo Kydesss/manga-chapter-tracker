@@ -33,24 +33,72 @@ targets are a sketch, not a commitment.
 
 ## Theme 1: Brand identity and design system (tentative v0.3)
 
-**Why.** The product opens to a generic "Manga Tracker" header and a sparse popup. To
-feel like a real product (and carry a portfolio), it needs a name, a visual identity,
-and a documented design system.
+**Why.** The product ships as a generic "Manga Tracker." To feel like a real product (and
+carry a portfolio), it needs a name, a clear promise, a visual identity, and a documented
+design system.
 
-**Vision / scope.**
-- A distinctive name and logo. The current name is a placeholder. Naming directions (all need a trademark and domain check):
-  - Bookmark / place-keeping: *Shiori* (栞, Japanese for bookmark), *Marque*, *Dogear*.
-  - Continuation: *Tsuzuki* (続き, "to be continued"), *Nextup*, *Resume*.
-  - Reading: *Yomu* (読む, "to read"), *Chapterly*, *Pagekeep*.
-- A formal design system: tokens (color, type, spacing, radius, elevation) promoted from the current ad-hoc CSS variables; a component inventory shared by the popup and the full-page app (Theme 2).
-- **Light and dark themes.** Respect the OS preference by default (`prefers-color-scheme`), with an explicit override in Settings. All tokens must pass WCAG AA contrast, including badges and disabled states (the reference mockup's grey-on-grey "Planned" count and disabled button would fail).
-- **Status color semantics** (from the reference): Reading = blue, Completed = green, Planned = grey, always paired with a text label, never color alone.
-- **Card hierarchy** (from the reference): title is primary, current chapter and progress secondary, last-read tertiary. The current popup buries the chapter in a side badge; rework rows to this hierarchy so they're glanceable.
-- **Progress UI rule:** show a progress bar and "Chapter X / Y" only once the latest chapter is known (Theme 6). Never render an empty or faked bar.
+### Product identity (decided)
+
+**Name:** Shiori
+
+**Meaning:** 栞 (Japanese for bookmark) - literally the object whose only job is helping a
+reader continue where they left off. The name carries the promise instead of describing a
+feature, and it future-proofs the product beyond manga (webtoons, light novels, fanfiction,
+articles, docs), which is the direction Theme 5 already points toward.
+
+**Brand promise:** Never lose your place.
+
+**Tagline:** Remember your place.
+
+**Mission:** Help readers continue every story effortlessly across sites, browsers, and devices.
+
+**Vision:** The universal bookmark for everything you read.
+
+**Values:** Continuity (always resume where you left off), Reliability (progress never
+disappears or moves backward), Simplicity (saving and resuming take as little effort as
+possible), Respect (help without demanding attention).
+
+Every later design decision is measured against one question: **does this help Shiori
+remember the reader's place?** The identity emphasizes continuity, reliability, and
+simplicity, not manga fandom or collection management.
+
+### Logo direction
+
+Center on a **bookmark**, recognizable at 16x16 and as a toolbar badge (legibility over
+cleverness). Avoid manga panels, anime eyes, chibi mascots, and speech bubbles, they make it
+read as a manga app rather than a reading-continuity tool.
+- **Concept A (recommended):** a simple geometric bookmark whose negative space forms an "S".
+- **Concept B:** a bookmark with a progress marker partway down ("you are here" without words).
+
+### Voice
+
+Calm and confident, an extension of the restraint principle. Good: "Continue reading,"
+"Saved at Chapter 142," "Last read 3 days ago," "New chapter available." Avoid hype: "Epic
+progress unlocked," "Keep grinding," "You're on fire."
+
+### Design system
+
+- Tokens (color, type, spacing, radius, elevation) promoted from the current ad-hoc CSS
+  variables; a component inventory shared by the popup and the full-page app (Theme 2).
+- **Palette (starting point):** Primary indigo `#4F46E5`, Success `#22C55E`, Neutral
+  `#64748B`, dark Surface `#111827`, light Background `#F8FAFC`. The intended feel is
+  Kindle / Notion / Linear (calm, reading-first), not anime-streaming.
+- **Light and dark themes.** Respect the OS preference by default (`prefers-color-scheme`),
+  with an explicit override in Settings. All tokens must pass WCAG AA contrast, including
+  badges and disabled states.
+- **Status color semantics:** Reading = indigo/blue, Completed = green, Planned = neutral,
+  always paired with a text label, never color alone.
+- **Card hierarchy:** title primary, current chapter and progress secondary, last-read
+  tertiary. The current popup buries the chapter in a side badge; rework rows to this
+  hierarchy so they're glanceable.
+- **Progress UI rule:** show a progress bar and "Chapter X / Y" only once the latest chapter
+  is known (Theme 6). Never render an empty or faked bar.
 - Relative timestamps ("2 days ago") for last-read.
 - Better empty and first-run states.
 
-**Open questions.** Final name; tone (playful vs minimal); public brand assets now or with the web app/launch.
+**Open questions.** Trademark and domain availability for "Shiori"; whether to rename the
+GitHub repo / display name now or at the 1.0 launch; logo Concept A vs B; public brand assets
+now or with the launch.
 
 ---
 

@@ -263,6 +263,32 @@ polish from features that depend on data we don't have yet (covers, progress).
 
 ---
 
+## 14. Naming the product: Shiori
+
+Joaquin chose the name **Shiori** (栞, Japanese for bookmark) and wrote a full brand
+foundation around it. His framing:
+
+> "A manga tracker tracks chapters. Shiori remembers your place. That's a much stronger
+> promise."
+
+The reasoning is positioning, not decoration:
+- The literal meaning (the object whose only purpose is continuing where you left off) maps
+  directly onto the product's principles, "progress is sacred," "never lose your place."
+- It future-proofs past manga toward a universal reading-continuity platform (webtoons,
+  light novels, fanfiction, articles), which is where Theme 5 already points.
+- Brand promise "Never lose your place"; tagline "Remember your place"; calm, confident
+  voice (an extension of restraint); a bookmark-centric logo; a Kindle/Notion/Linear visual
+  feel rather than anime-streaming.
+
+He set a test to anchor every later decision: **does this help Shiori remember the reader's
+place?**
+
+**Why it mattered.** Strong brand thinking: the name is chosen as a promise and a market
+position (a continuity tool, not a manga collection manager), with a one-line decision filter
+to keep the product coherent as it grows.
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."

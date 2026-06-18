@@ -1,6 +1,8 @@
-# Manga Chapter Tracker
+# Shiori
 
-A Chrome extension that tracks which chapter you're on across manga sites, in one unified library. Save the chapter you're reading with one click, then search, sort, and jump back to any series from a single popup. Works offline with local storage, and currently supports MangaRead and NatoManga.
+**Never lose your place.** Shiori (栞, Japanese for bookmark) is a browser extension that tracks which chapter you're on across manga sites, in one unified library. Save the chapter you're reading with one click, then search, sort, and jump back to any series from a single popup. Works offline with local storage, and currently supports MangaRead and NatoManga.
+
+(The repository and folders still use the `manga-chapter-tracker` name; the product is branded Shiori.)
 
 For the version history and what changed in each release, see [CHANGELOG.md](./CHANGELOG.md).
 

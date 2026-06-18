@@ -1,9 +1,9 @@
 {
   "name": "manga-chapter-tracker",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Chrome extension that tracks your current chapter across manga sites.",
+  "description": "Shiori - never lose your place. Tracks your current chapter across manga sites.",
   "scripts": {
     "test": "node --test"
   }

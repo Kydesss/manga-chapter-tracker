@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.3.0] - 2026-06-17
+
+Start of the brand and design-system theme.
+
+### Changed
+- **Renamed to Shiori** (栞, Japanese for bookmark). Brand promise: never lose your place.
+  Updated the extension name, popup header, and description. The extension ID is unchanged
+  (it comes from the manifest `key`), so sign-in and sync are unaffected.
+- **Shiori palette.** Reworked the popup color tokens to the indigo-led Shiori palette
+  (calm, reading-first), in both dark and light themes.
+
 ## [0.2.4] - 2026-06-17
 
 ### Added
