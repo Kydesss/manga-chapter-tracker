@@ -190,6 +190,79 @@ subtle Manifest V3 behavior.
 
 ---
 
+## 11. Bringing on a collaborator
+
+Joaquin invited Jonah (the original "i have 3-4k bookmarks" friend) to collaborate via
+GitHub. Notable framings from their chat:
+
+- On his own role: "im using AI / i'm just making decisions / creative vision." A third
+  friend dubbed it "vibe coding but supervised"; Jonah refined it to "semi-supervised
+  vibe coding."
+- On the roadmap: "well I told it my ideas and it created a roadmap ... so not 100%
+  generated ... it just did the groundwork and I tweaked it."
+- Decided to keep the repo private for now and "maybe open source it when we hit version
+  1.0."
+- Jonah will be the real stress test (~3-4k bookmarks) and uses local-only for now.
+
+**Why it mattered.** The project becomes a genuine two-person collaboration, and Joaquin
+is candid that his contribution is product direction and decision-making on top of
+AI-assisted implementation. That honesty, plus the roadmap and QA rigor, is a credible
+portfolio narrative.
+
+## 12. Scaling ideas from friends, and the 1.0 / business shape
+
+A conversation with friends (Felix and John) generated the next wave of roadmap thinking,
+and Joaquin made several product/business calls:
+
+- **Custom sites.** Felix asked whether the tool is "site specific or just a list of the
+  stuff you saved." That reframed a scaling problem into a feature: instead of hardcoding
+  every site, let users add their own via a settings page (host + URL pattern), so the
+  extension works anywhere. Joaquin chose a phased build (simple URL patterns first,
+  metadata/live-tracking selectors later).
+- **Save reminders.** From Joaquin's own pain of getting immersed and forgetting to save:
+  both an active nudge (including detecting the end-of-chapter "back to series" control)
+  and an opt-in, local-only passive "potentially unsaved" list. He flagged the privacy
+  question himself.
+- **A settings page** emerged as the shared foundation these need.
+- **Monetization.** Worried about Supabase cost at scale, Joaquin chose a freemium model:
+  local-first free forever, cloud as the paid tier (Stripe, likely a free trial).
+- **1.0 and going public.** Releasing to the Chrome Web Store would signal 1.0. Defined
+  1.0 as the polished public launch gated on a feature bar (design system, settings,
+  series bookmarks, custom sites, live tracking) plus freemium cloud and a privacy policy.
+- **iOS/Safari** (John's idea) kept as an exploration note only, not a committed theme.
+
+**Why it mattered.** Shows Joaquin moving from "a feature" to product and business
+thinking: extensibility as a moat, a sustainability model that aligns cost with payment,
+a clear 1.0 definition, and the judgment to keep speculative ideas as notes rather than
+commitments.
+
+---
+
+## 13. UI direction from a reference, and the full-page app
+
+Joaquin shared a Figma Make AI mockup of a manga tracker (light cards, cover art, status
+badges, summary stats, progress bars) as inspiration and asked for improvements "we can
+implement for ourselves." We ran a structured critique rather than copying it.
+
+Key decisions:
+- The mockup is a wide management layout, not a 360px popup. So the popup stays compact
+  and contextual (save, resume), and the rich layout moves to a separate **full-page app**
+  opened in a tab.
+- **Library and Settings become one full-page app** (Joaquin's call), reusing the same
+  storage and modules as the popup, so it's a new surface, not a second codebase.
+- The reference's visual language was folded into the design system: OS-aware light/dark
+  themes, status color semantics (with text labels, never color alone), a clearer card
+  hierarchy, and a rule to show progress bars only once the latest chapter is known (no
+  faked progress).
+- Two quick wins shipped immediately: relative "last read" timestamps and an OS-aware
+  light theme.
+
+**Why it mattered.** Shows using a reference critically (adopt / adapt / skip, by
+surface), recognizing that layout belongs to the right surface, and separating "do it now"
+polish from features that depend on data we don't have yet (covers, progress).
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."

@@ -13,6 +13,21 @@
   --radius: 10px;
 }
 
+/* Light theme: follow the OS preference. A manual override will live in the
+   full-page app's settings later. All values chosen to keep WCAG AA contrast. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f6f8;
+    --surface: #ffffff;
+    --surface-2: #e9e9ef;
+    --text: #1b1b22;
+    --muted: #6b6b76;
+    --accent: #6a45ff;
+    --accent-text: #ffffff;
+    --danger: #d23b5c;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.2.4] - 2026-06-17
+
+### Added
+- **Relative "last read" time** on each library row (for example "Site · 2d ago").
+- **Light theme.** The popup now follows the OS appearance via `prefers-color-scheme`;
+  an explicit override will arrive with the full-page app's settings.
+
+### Docs
+- Roadmap reorganized: added a full-page library + settings app, user-added custom sites,
+  save reminders, distribution + freemium monetization, and a dual-store (Chrome + Firefox)
+  1.0 definition. Added `CONTRIBUTING.md`. Process journal updated.
+
 ## [0.2.3] - 2026-06-17
 
 ### Fixed

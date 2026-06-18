@@ -56,7 +56,8 @@ The parser was tested against real URLs from both sites, including decimal chapt
 
 ## Roadmap
 
-The full product vision and planned themes (brand and design system, series
-bookmarks, bulk import, more sites and richer metadata, live update detection,
-Firefox support, a companion web app, plus sync-hardening and polish backlogs)
-live in [ROADMAP.md](./ROADMAP.md). Shipped work is in the [changelog](./CHANGELOG.md).
+The full product vision and planned themes (brand and design system, a full-page
+library + settings app, series bookmarks, bulk import, user-added custom sites, live
+update detection, save reminders, Firefox support, a companion web app, and a public 1.0
+launch with freemium cloud) live in [ROADMAP.md](./ROADMAP.md). Shipped work is in the
+[changelog](./CHANGELOG.md).
