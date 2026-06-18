@@ -127,6 +127,9 @@ function computeView() {
   countEl.textContent = allRecords.length ? `${allRecords.length} series` : "";
   emptyEl.hidden = allRecords.length > 0;
   noResultsEl.hidden = !(allRecords.length > 0 && filtered.length === 0);
+  // Hide the (flexing) list when there's nothing to show, so the empty/no-results
+  // message centres in the freed space instead of an empty scroller holding it.
+  scroller.hidden = filtered.length === 0;
 
   // Re-virtualize from the top whenever the dataset/view changes.
   sizer.style.height = filtered.length * ROW_H + "px";

@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -27,18 +28,21 @@
       </select>
     </div>
 
-    <!-- Virtualized library: only visible rows are rendered into #sizer. -->
-    <div id="scroller" class="scroller" role="list" aria-label="Saved series">
-      <div id="sizer" class="sizer"></div>
+    <!-- Library region: flexes to fill the popup so the footer stays pinned. -->
+    <div class="content">
+      <!-- Virtualized library: only visible rows are rendered into #sizer. -->
+      <div id="scroller" class="scroller" role="list" aria-label="Saved series">
+        <div id="sizer" class="sizer"></div>
+      </div>
+      <div id="empty" class="empty-state" hidden>
+        <img src="icons/logo.svg" width="44" height="44" alt="" aria-hidden="true" class="empty-mark" />
+        <p class="empty-title">Nothing saved yet</p>
+        <p class="empty-text">
+          Open a chapter on MangaRead or NatoManga and hit Save. Shiori remembers your place.
+        </p>
+      </div>
+      <p id="noResults" class="empty" hidden>No series match your search.</p>
     </div>
-    <div id="empty" class="empty-state" hidden>
-      <img src="icons/logo.svg" width="44" height="44" alt="" aria-hidden="true" class="empty-mark" />
-      <p class="empty-title">Nothing saved yet</p>
-      <p class="empty-text">
-        Open a chapter on MangaRead or NatoManga and hit Save. Shiori remembers your place.
-      </p>
-    </div>
-    <p id="noResults" class="empty" hidden>No series match your search.</p>
 
     <!-- Backup controls. -->
     <footer class="footer">

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.3.2] - 2026-06-18
+
+### Changed
+- **Pinned footer / no more scrolling.** The popup is now a fixed-height flex column:
+  header, save area, and controls stay at the top, the library list scrolls internally,
+  and the footer (sync status, sign in/out, export, import) stays pinned and visible at
+  a glance.
+- **More breathing room** in the footer area (padding, gaps, larger button hit areas).
+
+### Internal
+- **Design tokens formalized** into `tokens.css` (colours, type scale, spacing, radius,
+  elevation) as the single source of truth, shared by the popup and the future full-page
+  app; documented in `docs/design-tokens.md`. No visual change.
+
 ## [0.3.1] - 2026-06-18
 
 Continued brand and design-system work (Theme 1).

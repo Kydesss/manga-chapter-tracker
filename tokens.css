@@ -1,0 +1,65 @@
+/* tokens.css - Shiori design tokens (single source of truth).
+   Shared by the popup and (later) the full-page app. Themes work by overriding
+   the colour tokens; everything else (type, spacing, radius, elevation) is shared.
+   Calm, reading-first feel (Kindle / Notion / Linear), indigo-led. */
+
+:root {
+  /* --- Colour: dark (default) --- */
+  --bg: #0b1120;
+  --surface: #111827;
+  --surface-2: #1f2937;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --accent: #4f46e5; /* indigo, the Shiori brand colour */
+  --accent-text: #ffffff;
+  --success: #22c55e;
+  --danger: #f43f5e;
+
+  /* --- Typography --- */
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px; /* base body size */
+  --text-lg: 16px;
+  --leading: 1.45;
+
+  /* --- Spacing scale --- */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 20px;
+  --space-9: 28px;
+
+  /* --- Radius --- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 10px; /* default surface radius */
+  --radius-pill: 999px;
+
+  /* --- Elevation --- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* --- Colour: light (follows OS preference) ---
+   A manual override will live in the full-page app's settings later (it can set
+   these same tokens on a [data-theme] attribute). All values keep WCAG AA. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-2: #e8edf4;
+    --text: #111827;
+    --muted: #64748b;
+    --accent: #4f46e5;
+    --accent-text: #ffffff;
+    --success: #16a34a;
+    --danger: #dc2626;
+    --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.08);
+    --shadow-2: 0 4px 16px rgba(15, 23, 42, 0.12);
+  }
+}

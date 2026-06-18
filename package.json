@@ -1,6 +1,6 @@
 {
   "name": "manga-chapter-tracker",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "Shiori - never lose your place. Tracks your current chapter across manga sites.",
