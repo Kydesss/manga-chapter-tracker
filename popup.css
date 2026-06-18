@@ -169,16 +169,18 @@ h1 {
 .item-sub {
   font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
 }
 
-.chapter-badge {
-  background: var(--surface-2);
+/* Chapter is the emphasized secondary fact; site + time are tertiary (muted,
+   inherited from .item-sub). Emphasis via weight/colour keeps contrast safe in
+   both themes (indigo text on a dark surface would fail). */
+.item-chapter {
   color: var(--text);
-  border-radius: 6px;
-  padding: 2px 7px;
-  font-size: 12px;
   font-weight: 600;
-  white-space: nowrap;
 }
 
 .delete-btn {
@@ -201,6 +203,42 @@ h1 {
   text-align: center;
   padding: 20px 10px;
   font-size: 13px;
+}
+
+/* Welcoming empty / first-run state. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 28px 18px;
+  gap: 4px;
+}
+
+/* The class selector above outranks the default [hidden] rule, so restore the
+   hide behaviour explicitly. Without this the empty state shows over the list. */
+.empty-state[hidden] {
+  display: none;
+}
+
+.empty-mark {
+  opacity: 0.9;
+  margin-bottom: 6px;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  max-width: 260px;
 }
 
 .toast {

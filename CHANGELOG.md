@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.3.1] - 2026-06-18
+
+Continued brand and design-system work (Theme 1).
+
+### Added
+- **Shiori logo and icon set.** New indigo icon (Concept A: a bookmark with an "S" in
+  the negative space) at 16/32/48/128, plus a scalable `icons/logo.svg` shown in the README.
+- **Welcoming empty / first-run state** in the popup (the Shiori mark, a heading, and a
+  one-line how-it-works).
+
+### Changed
+- **Library row hierarchy.** Title is primary; the chapter is emphasized on a secondary
+  line, with site and last-read as muted tertiary text. The chapter is no longer a small
+  side badge. Emphasis uses weight/colour (not indigo text) to keep WCAG AA contrast in
+  both themes.
+
 ## [0.3.0] - 2026-06-17
 
 Start of the brand and design-system theme.

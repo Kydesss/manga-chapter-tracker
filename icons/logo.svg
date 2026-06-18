@@ -1,0 +1,10 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Shiori">
+  <!-- Shiori mark: a bookmark with an "S" in the negative space. Concept A. -->
+  <rect width="128" height="128" rx="28" fill="#4F46E5"/>
+  <!-- White bookmark -->
+  <path d="M37.1 23 H90.9 V107.5 L64 90.9 L37.1 107.5 Z" fill="#F8FAFC"/>
+  <!-- "S" punched through in the indigo background colour -->
+  <text x="64" y="58" fill="#4F46E5" text-anchor="middle" dominant-baseline="central"
+        font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-weight="700" font-size="60">S</text>
+</svg>

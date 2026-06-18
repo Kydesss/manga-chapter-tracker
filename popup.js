@@ -180,18 +180,25 @@ function renderItem(r) {
 
   const main = document.createElement("div");
   main.className = "item-main";
+
+  // Primary: title.
   const title = document.createElement("div");
   title.className = "item-title";
   title.textContent = r.title;
-  const sub = document.createElement("div");
-  sub.className = "item-sub";
-  const when = relativeTime(r.updatedAt);
-  sub.textContent = when ? `${r.siteName} · ${when}` : r.siteName;
-  main.append(title, sub);
 
-  const badge = document.createElement("span");
-  badge.className = "chapter-badge";
-  badge.textContent = "Ch. " + r.chapter;
+  // Secondary: chapter (emphasized), then site and last-read (tertiary, muted).
+  const meta = document.createElement("div");
+  meta.className = "item-sub";
+  const chap = document.createElement("span");
+  chap.className = "item-chapter";
+  chap.textContent = "Chapter " + r.chapter;
+  const rest = document.createElement("span");
+  rest.className = "item-meta";
+  const when = relativeTime(r.updatedAt);
+  rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
+  meta.append(chap, rest);
+
+  main.append(title, meta);
 
   const del = document.createElement("button");
   del.className = "delete-btn";
@@ -206,7 +213,7 @@ function renderItem(r) {
     runSync(); // push the tombstone so the deletion propagates
   });
 
-  row.append(main, badge, del);
+  row.append(main, del);
   return row;
 }
 
