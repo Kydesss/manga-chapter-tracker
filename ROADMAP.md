@@ -64,6 +64,12 @@ Kindle/Notion/Linear feel, OS light/dark themes, and formalized design tokens
 (`tokens.css`, documented in `docs/design-tokens.md`). Status color semantics, card
 hierarchy, and the "no faked progress bars" rule are defined for the surfaces below.
 
+**Reversible-action pattern (v0.3.3).** Wherever a surface can move the reader's position,
+the action that moves it is primary and a non-destructive one sits beside it: the popup
+pairs **Update chapter** with **Go to chapter X**, which returns you to your saved place
+without touching it. "Progress is sacred" made reversible - carry it into every later
+surface that can move a position.
+
 ---
 
 ## Bundle A: Management surface (tentative v0.4)
@@ -78,6 +84,8 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   filter tabs, sort, large cards, management actions) and **Settings** (connected sites,
   reminders, notifications, account/sync, data import/export). Design target: the Figma
   Make reference. Opened via `chrome.tabs.create({ url: chrome.runtime.getURL("library.html") })`.
+  Needs a counterpart to the popup's reversible-action pattern: the app is where a series
+  sitting at the wrong chapter is most likely to be noticed.
 - **Series bookmarks / statuses.** One record per series gains a `status`
   (`plan` | `reading` | later `completed`/`dropped`). Save a series page as "plan to
   read"; saving a chapter flips it to "reading." Needs series-page detection in the
@@ -125,6 +133,8 @@ on it.
   followed series for the latest chapter. Toolbar badge counts series with updates;
   per-series "+N" badges show how far ahead each is; quiet by default, OS notifications
   only as a later per-series opt-in. Per-series and global off switches in Settings.
+  Once latest is known, the save area can offer "Go to latest chapter" as a third action
+  beside the existing jump to your saved one.
 - **Custom-site selectors (phase 2).** Optional CSS selectors per custom site for title,
   cover, and latest chapter, so the two features above also work on user-added sites.
 
@@ -187,7 +197,9 @@ daily use.
 - Tombstone purge (hard-delete old soft-deletes).
 - Full multi-account handling (v0.2 only guards against cross-account merging).
 - "Resolved N differences" indicator after a conflict.
-- "Set current chapter" override to intentionally move to an earlier chapter.
+- "Set current chapter" override to intentionally move to an earlier chapter. The v0.3.3
+  "Go to chapter X" button is the read-only half of this; deliberately moving the saved
+  position backward still means overwriting it from the chapter page.
 
 ## Polish backlog (small, pick up anytime)
 
@@ -195,6 +207,10 @@ daily use.
 - Filter/sort by site in the library.
 - Parser robustness for URL variants (query strings, `#anchors`, `/chapter-100/2`, `vol-2-chapter-5`).
 - Delete undo.
+- Chapter labels that can't be ranked numerically ("Extra", "Omake"), which reach storage
+  through import or another client. v0.3.3 stops the save area claiming a direction for
+  them, but the furthest-chapter merge rule still can't order them either: needs a real
+  chapter-ordering model, not a `parseFloat`.
 
 ## Exploration / maybe-someday (not committed)
 

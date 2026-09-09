@@ -8,6 +8,34 @@ tags:
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [0.3.3] - 2026-09-08
+
+### Added
+- **"Go to chapter X" in the save area.** When the tab you're on is a *different* chapter
+  of a series you already track, the save area now shows a second, secondary button that
+  takes you to your saved chapter. It deliberately does **not** save, so a mismatch
+  finally has a way out that leaves your reading position alone — previously the only
+  action available was the one that overwrote it. Shown in both directions (behind *and*
+  ahead of your bookmark, since overshooting is as easy as falling behind), and hidden
+  when the saved chapter is the one you're already on. It navigates the current tab
+  rather than opening a second tab of the same series; Back returns you.
+
+### Fixed
+- **Non-comparable chapter labels no longer claim a direction.** A saved chapter whose
+  label doesn't parse as a number (reachable through JSON import or a record from another
+  client, never from our own parser) fell through to the "this would move you back"
+  warning. It now states the saved position plainly instead.
+- **Stored chapter links are validated before use.** A record's `chapterUrl` is untrusted
+  input — it can arrive from a hand-edited import or another device, and older records
+  may not have one at all. Opening a series now checks the URL parses and is `http(s)`
+  first, and reports a missing link instead of failing silently.
+
+### Docs
+- README corrected: it still claimed the extension had no background service worker, which
+  stopped being true in v0.2.3 when the OAuth flow moved into one. Documented `auth.js`,
+  `background.js`, `config.js`, `sync.js`, `merge.js`, and `tokens.css`; added the sync
+  data-flow diagram; fixed the test instructions to `npm test`.
+
 ## [0.3.2] - 2026-06-18
 
 ### Changed
