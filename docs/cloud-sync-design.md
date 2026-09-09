@@ -1,3 +1,8 @@
+---
+tags:
+  - development
+---
+
 # Design: Cloud Accounts and Sync (v0.2.0)
 
 A design blueprint for adding optional accounts and cross-device sync to Manga Chapter Tracker. This is the planning artifact agreed before implementation.

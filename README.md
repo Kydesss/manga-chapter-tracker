@@ -1,3 +1,8 @@
+---
+tags:
+  - development
+---
+
 <p align="center"><img src="icons/logo.svg" width="88" alt="Shiori logo"></p>
 
 # Shiori
@@ -60,8 +65,8 @@ The parser was tested against real URLs from both sites, including decimal chapt
 
 ## Roadmap
 
-The full product vision and planned themes (brand and design system, a full-page
-library + settings app, series bookmarks, bulk import, user-added custom sites, live
-update detection, save reminders, Firefox support, a companion web app, and a public 1.0
-launch with freemium cloud) live in [ROADMAP.md](./ROADMAP.md). Shipped work is in the
-[changelog](./CHANGELOG.md).
+The full product vision lives in [ROADMAP.md](./ROADMAP.md), organized into bundles of
+features that share a foundation and ship together: the management surface (full-page app
++ statuses + bulk import), user extensibility (custom sites + save reminders),
+series-page intelligence (metadata + live updates), a mobile web app, and the 1.0 launch
+(Firefox + stores + freemium cloud). Shipped work is in the [changelog](./CHANGELOG.md).

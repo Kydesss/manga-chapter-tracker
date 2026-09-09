@@ -1,3 +1,9 @@
+---
+tags:
+  - development
+  - ux-design
+---
+
 # Case Study: A Bookmark Tracker for Manga Readers
 
 A self-initiated UX project that turns a real frustration into a focused product concept: a Chrome extension that tracks which chapter a reader is on, across hundreds or thousands of ongoing manga.

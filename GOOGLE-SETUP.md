@@ -1,3 +1,8 @@
+---
+tags:
+  - development
+---
+
 # Google Sign-In Setup (Milestone 1 auth spike)
 
 These are the one-time steps only you can do, because they use your Google and Supabase accounts. The code and the Supabase project/table are already done. After this, sign-in works.

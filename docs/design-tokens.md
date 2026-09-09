@@ -1,3 +1,9 @@
+---
+tags:
+  - development
+  - ux-design
+---
+
 # Design tokens
 
 Shiori's design tokens are the single source of truth for colour, type, spacing,

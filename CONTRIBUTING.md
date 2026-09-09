@@ -1,3 +1,8 @@
+---
+tags:
+  - development
+---
+
 # Contributing
 
 Welcome. This is a small two-person project (Joaquin and Jonah) building a manga

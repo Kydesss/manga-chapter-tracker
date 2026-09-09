@@ -1,3 +1,9 @@
+---
+tags:
+  - development
+  - ux-design
+---
+
 # Process Log (decision journal)
 
 A running, chronological record of how this project actually unfolded: the

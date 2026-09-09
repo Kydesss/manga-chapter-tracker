@@ -1,3 +1,8 @@
+---
+tags:
+  - development
+---
+
 # Changelog
 
 All notable changes to this project are documented here. Versions follow the
