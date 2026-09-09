@@ -56,6 +56,14 @@ h1 {
   color: var(--text);
 }
 
+/* Stacked so the primary action keeps the full-width weight it had, and the
+   secondary one reads as clearly subordinate rather than an equal choice. */
+.save-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .save-btn {
   width: 100%;
   padding: 9px;
@@ -72,6 +80,23 @@ h1 {
   background: var(--surface-2);
   color: var(--muted);
   cursor: not-allowed;
+}
+
+/* Secondary: same shape, no fill, so it never competes with Update/Save. */
+.save-btn.secondary {
+  padding: 7px 9px;
+  background: transparent;
+  border: 1px solid var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.save-btn.secondary:hover {
+  border-color: var(--muted);
 }
 
 .controls {

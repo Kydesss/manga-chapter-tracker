@@ -12,6 +12,7 @@ import { syncNow } from "./sync.js";
 // Elements.
 const saveInfo = document.getElementById("saveInfo");
 const saveBtn = document.getElementById("saveBtn");
+const goSavedBtn = document.getElementById("goSavedBtn");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
 const scroller = document.getElementById("scroller");
@@ -31,6 +32,7 @@ const ROW_H = 56; // must match --row-h in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
+let pendingTabId = null; // the tab `pending` came from, so we can navigate it
 let allRecords = []; // every saved series (source of truth in memory)
 let filtered = []; // current search/sort view, the array we virtualize
 
@@ -41,7 +43,9 @@ async function getActiveTab() {
   return tab;
 }
 
-// Compare two chapter labels ("83.2", "246") numerically. Returns -1/0/1.
+// Compare two chapter labels ("83.2", "246") numerically. Returns -1/0/1, or
+// NaN when the labels aren't numerically comparable (possible for records that
+// arrived through JSON import or another device, never from our own parser).
 function compareChapters(a, b) {
   const na = parseFloat(a);
   const nb = parseFloat(b);
@@ -49,14 +53,46 @@ function compareChapters(a, b) {
   return Math.sign(na - nb);
 }
 
+// A stored chapterUrl is untrusted: it can come from a hand-edited JSON import
+// or another device, and older records may not have one at all. Only ever hand
+// an http(s) URL to the tabs API.
+function safeUrl(raw) {
+  if (typeof raw !== "string") return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// The secondary "go to your saved chapter" action. Hidden unless this tab is a
+// different chapter of a series we already track.
+function setGoToSaved(record, url) {
+  if (!record || !url) {
+    goSavedBtn.hidden = true;
+    delete goSavedBtn.dataset.url;
+    return;
+  }
+  goSavedBtn.hidden = false;
+  goSavedBtn.textContent = `Go to chapter ${record.chapter}`;
+  goSavedBtn.setAttribute(
+    "aria-label",
+    `Go to your saved chapter ${record.chapter} of ${record.title}, without changing it`
+  );
+  goSavedBtn.dataset.url = url;
+}
+
 async function refreshSaveArea() {
   const tab = await getActiveTab();
+  pendingTabId = tab?.id ?? null;
   pending = tab?.url ? parseChapterUrl(tab.url) : null;
 
   if (!pending) {
     saveInfo.textContent =
       "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
     saveBtn.disabled = true;
+    setGoToSaved(null, null);
     return;
   }
 
@@ -64,6 +100,7 @@ async function refreshSaveArea() {
   // a surprise overwrite.
   const existing = await getOne(pending.id);
   let note = "";
+  let savedUrl = null;
   if (existing) {
     const dir = compareChapters(pending.chapter, existing.chapter);
     if (dir === 0) {
@@ -76,11 +113,26 @@ async function refreshSaveArea() {
         existing.chapter
       )} &rarr; will advance to ${escapeHtml(pending.chapter)}.</div>`;
       saveBtn.textContent = "Update chapter";
-    } else {
+    } else if (dir < 0) {
       note = `<div class="save-note back">Saved: chapter ${escapeHtml(
         existing.chapter
       )}. This would move you back to ${escapeHtml(pending.chapter)}.</div>`;
       saveBtn.textContent = "Update chapter";
+    } else {
+      // NaN: we can't rank these labels, so state the saved position without
+      // claiming a direction rather than wrongly warning about moving back.
+      note = `<div class="save-note">Saved: chapter ${escapeHtml(
+        existing.chapter
+      )}.</div>`;
+      saveBtn.textContent = "Update chapter";
+    }
+
+    // Offer the jump whenever the saved chapter is a different one (either
+    // direction: you can overshoot as easily as you can fall behind). Skip it
+    // when the saved link is unusable, or is the page you're already on.
+    if (dir !== 0) {
+      savedUrl = safeUrl(existing.chapterUrl);
+      if (savedUrl && savedUrl === safeUrl(pending.chapterUrl)) savedUrl = null;
     }
   } else {
     saveBtn.textContent = "Save chapter";
@@ -91,6 +143,7 @@ async function refreshSaveArea() {
       pending.chapter
     )} on ${escapeHtml(pending.siteName)}` + note;
   saveBtn.disabled = false;
+  setGoToSaved(existing, savedUrl);
 }
 
 // --- Saving ---------------------------------------------------------------
@@ -102,6 +155,21 @@ saveBtn.addEventListener("click", async () => {
   await load();
   await refreshSaveArea();
   runSync(); // push this save to the cloud if signed in (fire and forget)
+});
+
+// Jump to the saved chapter. Deliberately does NOT save: it's the way out of a
+// mismatch that leaves your position untouched.
+goSavedBtn.addEventListener("click", async () => {
+  const url = safeUrl(goSavedBtn.dataset.url);
+  if (!url) return;
+  // Navigate the tab you're already on rather than opening a second one: you're
+  // on the wrong chapter of this very series, and Back still returns you.
+  if (pendingTabId != null) {
+    await chrome.tabs.update(pendingTabId, { url });
+  } else {
+    await chrome.tabs.create({ url });
+  }
+  window.close();
 });
 
 // --- Data load + view computation -----------------------------------------
@@ -172,7 +240,14 @@ function renderItem(r) {
   row.tabIndex = 0; // keyboard focusable
   row.setAttribute("aria-label", `${r.title}, chapter ${r.chapter}, ${r.siteName}`);
 
-  const open = () => chrome.tabs.create({ url: r.chapterUrl });
+  const open = () => {
+    const url = safeUrl(r.chapterUrl);
+    if (!url) {
+      showToast("That series has no usable saved link.");
+      return;
+    }
+    chrome.tabs.create({ url });
+  };
   row.addEventListener("click", open);
   row.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {

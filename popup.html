@@ -14,7 +14,12 @@
     <!-- Save area: reflects the current tab. -->
     <section id="saveArea" class="save-area" aria-label="Save current chapter">
       <div id="saveInfo" class="save-info">Checking this page...</div>
-      <button id="saveBtn" class="save-btn" disabled>Save chapter</button>
+      <div class="save-actions">
+        <button id="saveBtn" class="save-btn" disabled>Save chapter</button>
+        <!-- Only shown when this tab is a different chapter than the saved one:
+             the non-destructive way out, next to the destructive one. -->
+        <button id="goSavedBtn" class="save-btn secondary" type="button" hidden></button>
+      </div>
     </section>
 
     <!-- Controls for the library. -->
