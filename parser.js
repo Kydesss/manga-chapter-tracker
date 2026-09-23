@@ -25,12 +25,18 @@ function matchSite(hostname) {
 
 // Turn a slug like "blue-lock" into a readable "Blue Lock".
 // This is the simple fallback title source for v1 (no content script needed).
-function prettifyTitle(slug) {
+export function prettifyTitle(slug) {
   return slug
     .split("-")
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+// True when `title` is only the slug-derived fallback above. A real title (from
+// a bookmark import, or later the page itself) should never be replaced by it.
+export function isSlugTitle(title, slug) {
+  return typeof slug === "string" && title === prettifyTitle(slug);
 }
 
 // Chapter "83-2" should display as "83.2".

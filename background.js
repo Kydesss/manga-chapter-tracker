@@ -16,6 +16,7 @@ import { bulkUpsert, migrate } from "./storage.js";
 const IMPORT_JOB_KEY = "natomangaImportJob";
 const MAX_IMPORT_PAGES = 1000;
 const MAX_RETRIES = 3;
+const COUNT_FIELDS = ["added", "advanced", "enriched", "unchanged", "skipped", "processed"];
 let importRunning = false;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -42,7 +43,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           job = {
             ...job,
             status: "error",
-            error: "The previous import was interrupted. Press Save bookmarks to retry.",
+            error:
+              "The previous import was interrupted. Pages it finished were saved; press Save bookmarks to finish.",
             finishedAt: nowISO(),
             updatedAt: nowISO(),
           };
@@ -65,8 +67,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then((result) => sendResponse({ ok: true, result }))
       .catch(async (err) => {
         const error = errorMessage(err);
-        await updateImportJob({ status: "error", error, finishedAt: nowISO() });
-        sendResponse({ ok: false, error });
+        // An import that stopped partway has already saved its earlier pages.
+        const result = err?.result ?? null;
+        await updateImportJob({ status: "error", error, result, finishedAt: nowISO() });
+        sendResponse({ ok: false, error, result });
       })
       .finally(() => {
         importRunning = false;
@@ -80,19 +84,16 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
   if (!Number.isInteger(tabId) || !isNatoMangaUrl(pageUrl)) {
     throw new Error("Open NatoManga in the active tab before importing bookmarks.");
   }
-  const tab = await chrome.tabs.get(tabId);
-  if (!isNatoMangaUrl(tab?.url)) {
-    throw new Error("The selected tab is no longer on NatoManga.");
-  }
+  await ensureTabOnNatoManga(tabId);
 
   await migrate();
-  const timestamp = nowISO();
+  const startedAt = nowISO();
   const bookmarkUrl = new URL("/bookmark?page=1", pageUrl).href;
   await chrome.storage.local.set({
     [IMPORT_JOB_KEY]: {
       status: "running",
-      startedAt: timestamp,
-      updatedAt: timestamp,
+      startedAt,
+      updatedAt: startedAt,
       pagesCompleted: 0,
       pagesTotal: 1,
       bookmarksFound: 0,
@@ -102,11 +103,14 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
     },
   });
 
-  const records = [];
+  const counts = Object.fromEntries(COUNT_FIELDS.map((field) => [field, 0]));
+  let total = null;
   const diagnostics = [];
   const failedPages = [];
+  let bookmarksFound = 0;
   let pagesCompleted = 0;
   let pagesTotal = 1;
+  let stop = null;
 
   for (let page = 1; page <= pagesTotal; page++) {
     if (page > MAX_IMPORT_PAGES) {
@@ -115,14 +119,25 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
 
     const targetUrl = new URL(`/bookmark?page=${page}`, bookmarkUrl).href;
     try {
+      await ensureTabOnNatoManga(tabId);
       const response = await fetchPageInTab(tabId, targetUrl);
+      const timestamp = nowISO();
       const parsed = parseNatoBookmarkPage(response.html, response.url || targetUrl, {
         timestamp,
       });
       if (parsed.loginRequired) {
-        throw new Error("Sign in to NatoManga in this tab, then try again.");
+        throw stopError(
+          "Sign in to NatoManga in this tab, then try again.",
+          "NatoManga signed you out",
+          "Sign in and press Save bookmarks to finish."
+        );
       }
-      records.push(...parsed.records);
+      // Save each page as it arrives, so an interrupted import keeps what it
+      // already fetched. Re-running is safe: bulkUpsert never moves progress back.
+      const saved = await bulkUpsert(parsed.records, { timestamp });
+      for (const field of COUNT_FIELDS) counts[field] += saved[field];
+      total = saved.total;
+      bookmarksFound += parsed.records.length;
       diagnostics.push(...parsed.diagnostics.map((value) => `page-${page}:${value}`));
       pagesTotal = Math.min(
         MAX_IMPORT_PAGES,
@@ -130,36 +145,46 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
       );
       pagesCompleted++;
     } catch (err) {
-      const message = errorMessage(err);
-      if (/Sign in to NatoManga/i.test(message)) throw err;
-      failedPages.push({ page, error: message });
+      if (err?.stop) {
+        stop = { page, err };
+        break;
+      }
+      failedPages.push({ page, error: errorMessage(err) });
     }
 
     await updateImportJob({
       pagesCompleted,
       pagesTotal,
-      bookmarksFound: records.length,
+      bookmarksFound,
       failedPages,
     });
   }
 
-  if (!records.length && failedPages.length) {
-    throw new Error("No bookmarks could be imported because every bookmark page failed.");
-  }
-  if (!records.length && diagnostics.includes("page-1:no-bookmark-items")) {
-    // An empty account is a valid successful import.
-    pagesTotal = 1;
-  }
-
-  const storageResult = await bulkUpsert(records, { timestamp });
   const result = {
-    ...storageResult,
+    ...counts,
+    total,
     pagesCompleted,
     pagesTotal,
-    bookmarksFound: records.length,
+    bookmarksFound,
     failedPages,
     diagnostics,
   };
+
+  if (stop) {
+    if (!pagesCompleted) throw stop.err; // nothing was saved
+    const saved = `${bookmarksFound} bookmark${bookmarksFound === 1 ? "" : "s"}`;
+    const partial = new Error(
+      `Stopped at page ${stop.page} of ${pagesTotal}: ${stop.err.reason}. ` +
+        `${saved} from earlier pages ${bookmarksFound === 1 ? "was" : "were"} saved. ` +
+        stop.err.resume
+    );
+    partial.result = result;
+    throw partial;
+  }
+  if (!pagesCompleted && failedPages.length) {
+    throw new Error("No bookmarks could be imported because every bookmark page failed.");
+  }
+
   await updateImportJob({
     status: "complete",
     finishedAt: nowISO(),
@@ -167,6 +192,34 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
     error: null,
   });
   return result;
+}
+
+// Stop (instead of retrying) once the import's tab is closed or leaves
+// NatoManga: every remaining request would fail or run on the wrong site.
+async function ensureTabOnNatoManga(tabId) {
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    // The tab was closed.
+  }
+  if (!isNatoMangaUrl(tab?.url)) {
+    throw stopError(
+      "The NatoManga tab was closed or left NatoManga. Open NatoManga and press Save bookmarks again.",
+      "the NatoManga tab was closed or left NatoManga",
+      "Press Save bookmarks on a NatoManga tab to finish."
+    );
+  }
+}
+
+// An error that ends the import rather than failing one page. `reason` and
+// `resume` build the message when earlier pages were already saved.
+function stopError(message, reason, resume) {
+  const err = new Error(message);
+  err.stop = true;
+  err.reason = reason;
+  err.resume = resume;
+  return err;
 }
 
 async function fetchPageInTab(tabId, url) {
@@ -208,6 +261,7 @@ async function fetchPageInTab(tabId, url) {
     } catch (err) {
       lastError = err;
       if (err?.transient === false || attempt === MAX_RETRIES - 1) break;
+      await ensureTabOnNatoManga(tabId); // a closed tab ends the import, no retries
       await delay(500 * 2 ** attempt);
     }
   }

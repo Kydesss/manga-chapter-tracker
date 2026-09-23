@@ -150,8 +150,10 @@ async function refreshSaveArea() {
     saveBtn.textContent = "Save chapter";
   }
 
+  // Prefer the stored title: an import may know the real one, where the parser
+  // only has the slug.
   saveInfo.innerHTML =
-    `<strong>${escapeHtml(pending.title)}</strong><br>Chapter ${escapeHtml(
+    `<strong>${escapeHtml(existing?.title || pending.title)}</strong><br>Chapter ${escapeHtml(
       pending.chapter
     )} on ${escapeHtml(pending.siteName)}` + note;
   saveBtn.disabled = false;
@@ -162,8 +164,8 @@ async function refreshSaveArea() {
 
 saveBtn.addEventListener("click", async () => {
   if (!pending) return;
-  await upsert({ ...pending, updatedAt: new Date().toISOString() });
-  showToast(`Saved ${pending.title} - ch. ${pending.chapter}`);
+  const saved = await upsert({ ...pending, updatedAt: new Date().toISOString() });
+  showToast(`Saved ${saved.title} - ch. ${saved.chapter}`);
   await load();
   await refreshSaveArea();
   runSync(); // push this save to the cloud if signed in (fire and forget)
@@ -172,32 +174,46 @@ saveBtn.addEventListener("click", async () => {
 // --- NatoManga bookmark import -------------------------------------------
 
 let importPollTimer = null;
+let importRequestPending = false; // this popup started an import and awaits its reply
+let lastJobStatus = null; // to notice a watched import finishing
 
 natoImportBtn.addEventListener("click", async () => {
   const tab = await getActiveTab();
   if (!tab?.id || !tab.url || !isNatoMangaUrl(tab.url)) return;
 
+  importRequestPending = true;
   showImportJob({ status: "running", pagesCompleted: 0, pagesTotal: 1, bookmarksFound: 0 });
+  let response = null;
   try {
-    const response = await chrome.runtime.sendMessage({
+    response = await chrome.runtime.sendMessage({
       type: "import-natomanga-bookmarks",
       tabId: tab.id,
       pageUrl: tab.url,
     });
     if (!response?.ok) throw new Error(response?.error || "Bookmark import failed.");
     if (!response.inProgress) {
-      await load();
       const result = response.result;
       showToast(
         `Saved ${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
           (result.advanced ? `, advanced ${result.advanced}` : "")
       );
-      runSync();
     }
   } catch (err) {
     showImportJob({ status: "error", error: err?.message || "Bookmark import failed." });
-    showToast("Import failed: " + (err?.message || "unknown error"));
+    showToast(
+      response?.result
+        ? "Import stopped early; earlier pages were saved."
+        : "Import failed: " + (err?.message || "unknown error")
+    );
   } finally {
+    importRequestPending = false;
+    lastJobStatus = null; // handled here, so the refresh below isn't a new finish
+    // Pages are saved as they arrive, so even a stopped import may have added
+    // series: refresh the list and sync whatever landed.
+    if (!response?.inProgress) {
+      await load();
+      runSync();
+    }
     refreshImportState();
   }
 });
@@ -205,7 +221,15 @@ natoImportBtn.addEventListener("click", async () => {
 async function refreshImportState() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "get-natomanga-import-state" });
-    if (response?.ok && response.job) showImportJob(response.job);
+    if (!response?.ok || !response.job) return;
+    // Until this popup's own request is answered, the stored job may still be
+    // the previous run's. Keep showing progress rather than that old result.
+    if (importRequestPending && response.job.status !== "running") {
+      clearTimeout(importPollTimer);
+      importPollTimer = setTimeout(refreshImportState, 500);
+      return;
+    }
+    showImportJob(response.job);
   } catch {
     // The service worker may be starting; the next popup open retries.
   }
@@ -214,6 +238,13 @@ async function refreshImportState() {
 function showImportJob(job) {
   clearTimeout(importPollTimer);
   const running = job?.status === "running";
+  // An import this popup watched, but didn't start, just finished. Its pages
+  // are already saved, so bring them into the list and sync them.
+  if (lastJobStatus === "running" && !running && !importRequestPending) {
+    load();
+    runSync();
+  }
+  lastJobStatus = job?.status ?? null;
   natoImportBtn.disabled = running;
   natoImportBtn.textContent = running ? "Saving bookmarks..." : "Save bookmarks";
 
@@ -277,7 +308,14 @@ function computeView() {
   if (sortSelect.value === "title") {
     filtered.sort((a, b) => a.title.localeCompare(b.title));
   } else {
-    filtered.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+    // Recently read first. Series with no known read time (plan to read, or
+    // imported without one) follow alphabetically, instead of an import's
+    // timestamp pushing them all to the top.
+    filtered.sort(
+      (a, b) =>
+        (b.lastReadAt || "").localeCompare(a.lastReadAt || "") ||
+        a.title.localeCompare(b.title)
+    );
   }
 
   // Header count + empty/no-results messaging.
@@ -366,7 +404,7 @@ function renderItem(r) {
   chap.textContent = r.chapter == null ? "Plan to read" : "Chapter " + r.chapter;
   const rest = document.createElement("span");
   rest.className = "item-meta";
-  const when = relativeTime(r.lastReadAt || (r.chapter == null ? null : r.updatedAt));
+  const when = relativeTime(r.lastReadAt); // unknown for plan-to-read and imports
   rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
   meta.append(chap, rest);
 

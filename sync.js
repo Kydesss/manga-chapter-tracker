@@ -13,9 +13,8 @@ import { SITES } from "./parser.js";
 import { mergeRemoteIntoLocal } from "./merge.js";
 import {
   migrate,
-  getMap,
   getAllRaw,
-  writeAll,
+  updateMap,
   markSynced,
   getCursor,
   setCursor,
@@ -171,9 +170,10 @@ export async function syncNow({ throttle = false } = {}) {
     const remoteRecords = rows.map(fromRow);
 
     // 2. MERGE into local (never deletes on absence; sets dirty where we differ).
-    const localMap = await getMap();
-    const { next } = mergeRemoteIntoLocal(localMap, remoteRecords);
-    await writeAll(next);
+    //    One locked read-merge-write, so a save or import page can't be lost.
+    const next = await updateMap(
+      (localMap) => mergeRemoteIntoLocal(localMap, remoteRecords).next
+    );
 
     // 3. PUSH. On the very first sync, push everything so an empty (or partial)
     //    cloud receives the full local library. Afterwards, push only dirty.
@@ -182,7 +182,8 @@ export async function syncNow({ throttle = false } = {}) {
       isCloudCompatible
     );
     const pushedIds = await push(pushRecords, userId);
-    await markSynced(pushedIds);
+    // Records edited while the push was in flight stay dirty for the next pass.
+    await markSynced(pushRecords);
 
     // 4. Advance the cursor using server timestamps (avoids clock-skew gaps).
     const newCursor = maxTimestamp([

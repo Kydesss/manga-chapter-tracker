@@ -11,7 +11,11 @@ export const NATOMANGA_SELECTORS = Object.freeze({
   pagination: "group-page",
   bookmarkItem: "user-bookmark-item-right",
   title: "bm-title",
-  lastViewed: "span:nth-of-type(2) a",
+  // Each card has labelled <span>s for the reader's last-viewed chapter and the
+  // newest chapter. The last-viewed one is matched by its label, never by
+  // position, so a reordered card can't turn the newest chapter into progress.
+  lastViewedLabel: /\bview(?:ed)?\b|\blast\s*read\b/i,
+  latestLabel: /\b(?:latest|newest|current|new|updated?)\b/i,
 });
 
 const SERIES_PATH_RE = /^\/manga\/([^/]+)\/?$/i;
@@ -58,8 +62,9 @@ export function normalizeNatoBookmark(
   const series = parseSeriesUrl(seriesUrl);
   if (!series || !String(title || "").trim()) return null;
 
+  // The last-viewed link must be a chapter of this same series.
   const parsedChapter = lastViewedUrl ? parseChapterUrl(lastViewedUrl) : null;
-  const chapter = parsedChapter?.site === NATOMANGA_HOST ? parsedChapter : null;
+  const chapter = parsedChapter?.id === series.id ? parsedChapter : null;
 
   return {
     ...series,
@@ -67,7 +72,9 @@ export function normalizeNatoBookmark(
     status: chapter ? "reading" : "plan",
     chapter: chapter?.chapter ?? null,
     chapterUrl: chapter?.chapterUrl ?? null,
-    lastReadAt: chapter ? timestamp : null,
+    // Bookmark cards don't say when the chapter was read, and the import time
+    // isn't a read time. Unknown stays null.
+    lastReadAt: null,
     coverUrl: null,
     latestChapter: null,
     latestChapterUrl: null,
@@ -103,7 +110,9 @@ export function parseNatoBookmarkPage(
   const records = [];
   const items = findElementsByClass(source, NATOMANGA_SELECTORS.bookmarkItem);
 
-  if (looksLikeLoginPage(source, baseUrl)) {
+  // Only a page without bookmark cards can be the login page. A signed-in page
+  // may still carry a login-looking form (a header modal, say).
+  if (!items.length && looksLikeLoginPage(source, baseUrl)) {
     return { records, pageCount: 1, diagnostics: ["login-required"], loginRequired: true };
   }
 
@@ -131,11 +140,12 @@ export function parseNatoBookmarkPage(
       return;
     }
 
-    // NatoManga's current layout puts the last-viewed value in the second
-    // span. Do not fall back to an arbitrary chapter link: another link may be
-    // the newest chapter, which would falsely advance reading progress.
-    const spans = findElementsByTag(item.inner, "span");
-    const viewedAnchor = spans[1] ? findElementsByTag(spans[1].inner, "a")[0] : null;
+    // Never fall back to an arbitrary chapter link: another link may be the
+    // newest chapter, which would falsely advance reading progress. Without a
+    // "Viewed" span the series is imported as plan to read.
+    const viewedSpan = findLastViewedSpan(item.inner);
+    if (!viewedSpan) diagnostics.push(`item-${index + 1}:missing-last-viewed-label`);
+    const viewedAnchor = viewedSpan ? findElementsByTag(viewedSpan.inner, "a")[0] : null;
     const lastViewedUrl = resolveUrl(getAttribute(viewedAnchor?.attrs, "href"), baseUrl);
     const record = normalizeNatoBookmark(
       { title, seriesUrl, lastViewedUrl },
@@ -146,6 +156,9 @@ export function parseNatoBookmarkPage(
       diagnostics.push(`item-${index + 1}:invalid-record`);
       return;
     }
+    if (lastViewedUrl && record.chapter == null) {
+      diagnostics.push(`item-${index + 1}:unrecognized-last-viewed-link`);
+    }
     records.push(record);
   });
 
@@ -155,6 +168,19 @@ export function parseNatoBookmarkPage(
     diagnostics,
     loginRequired: false,
   };
+}
+
+// The first span whose own label (its text outside links) reads as "Viewed".
+// Spans labelled as the newest chapter are skipped even if they also match,
+// and the title's span has no label outside its link, so a title containing
+// "viewed" can't be mistaken for it.
+function findLastViewedSpan(cardHtml) {
+  for (const span of findElementsByTag(cardHtml, "span")) {
+    const label = cleanText(span.inner.replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/gi, " "));
+    if (NATOMANGA_SELECTORS.latestLabel.test(label)) continue;
+    if (NATOMANGA_SELECTORS.lastViewedLabel.test(label)) return span;
+  }
+  return null;
 }
 
 function looksLikeLoginPage(html, baseUrl) {
@@ -267,7 +293,18 @@ function decodeEntities(value) {
       const radix = lower.startsWith("#x") ? 16 : 10;
       const digits = lower.replace(/^#x?/, "");
       const point = Number.parseInt(digits, radix);
-      return Number.isFinite(point) ? String.fromCodePoint(point) : entity;
+      // Like browsers, map NUL, surrogates, and out-of-range values to U+FFFD
+      // instead of letting String.fromCodePoint throw on one bad title.
+      return isValidCodePoint(point) ? String.fromCodePoint(point) : "\uFFFD";
     }
+  );
+}
+
+function isValidCodePoint(point) {
+  return (
+    Number.isInteger(point) &&
+    point > 0 &&
+    point <= 0x10ffff &&
+    (point < 0xd800 || point > 0xdfff)
   );
 }
