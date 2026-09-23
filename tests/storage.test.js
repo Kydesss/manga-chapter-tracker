@@ -1,7 +1,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { migrate, upsert } from "../storage.js";
+import { bulkUpsert, migrate, upsert } from "../storage.js";
 
 let data;
 
@@ -108,4 +108,142 @@ test("saving a chapter preserves previously collected series metadata", async ()
   assert.equal(saved.latestChapter, "350");
   assert.equal(saved.createdAt, "2026-08-01T00:00:00.000Z");
   assert.equal(saved.dirty, true);
+});
+
+test("bulk import adds unread records and never moves progress backward", async () => {
+  data.schemaVersion = 3;
+  data.series = {
+    "natomanga.com:existing": {
+      id: "natomanga.com:existing",
+      site: "natomanga.com",
+      siteName: "NatoManga",
+      slug: "existing",
+      title: "Existing",
+      seriesUrl: "https://www.natomanga.com/manga/existing",
+      status: "reading",
+      chapter: "20",
+      chapterUrl: "https://www.natomanga.com/manga/existing/chapter-20",
+      lastReadAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      deleted: false,
+      dirty: false,
+    },
+  };
+
+  const result = await bulkUpsert(
+    [
+      {
+        id: "natomanga.com:existing",
+        site: "natomanga.com",
+        siteName: "NatoManga",
+        slug: "existing",
+        title: "Existing (Official Title)",
+        seriesUrl: "https://www.natomanga.com/manga/existing",
+        status: "reading",
+        chapter: "18",
+        chapterUrl: "https://www.natomanga.com/manga/existing/chapter-18",
+      },
+      {
+        id: "natomanga.com:unread",
+        site: "natomanga.com",
+        siteName: "NatoManga",
+        slug: "unread",
+        title: "Unread",
+        seriesUrl: "https://www.natomanga.com/manga/unread",
+        status: "plan",
+        chapter: null,
+        chapterUrl: null,
+      },
+    ],
+    { timestamp: "2026-09-22T12:00:00.000Z" }
+  );
+
+  assert.deepEqual(result, {
+    added: 1,
+    advanced: 0,
+    enriched: 1,
+    unchanged: 0,
+    skipped: 0,
+    processed: 2,
+    total: 2,
+  });
+  assert.equal(data.series["natomanga.com:existing"].chapter, "20");
+  assert.match(data.series["natomanga.com:existing"].chapterUrl, /chapter-20$/);
+  assert.equal(data.series["natomanga.com:existing"].title, "Existing (Official Title)");
+  assert.equal(data.series["natomanga.com:unread"].status, "plan");
+  assert.equal(data.series["natomanga.com:unread"].chapter, null);
+});
+
+test("bulk import deduplicates and keeps the furthest imported chapter", async () => {
+  data.schemaVersion = 3;
+  data.series = {};
+  const base = {
+    id: "natomanga.com:duplicate",
+    site: "natomanga.com",
+    siteName: "NatoManga",
+    slug: "duplicate",
+    title: "Duplicate",
+    seriesUrl: "https://www.natomanga.com/manga/duplicate",
+    status: "reading",
+  };
+
+  const result = await bulkUpsert(
+    [
+      { ...base, chapter: "8", chapterUrl: `${base.seriesUrl}/chapter-8` },
+      { ...base, chapter: "10", chapterUrl: `${base.seriesUrl}/chapter-10` },
+    ],
+    { timestamp: "2026-09-22T12:00:00.000Z" }
+  );
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.added, 1);
+  assert.equal(data.series[base.id].chapter, "10");
+});
+
+test("bulk import advances an existing series to the latest viewed chapter", async () => {
+  data.schemaVersion = 3;
+  data.series = {
+    "natomanga.com:advance-me": {
+      id: "natomanga.com:advance-me",
+      site: "natomanga.com",
+      siteName: "NatoManga",
+      slug: "advance-me",
+      title: "Advance Me",
+      seriesUrl: "https://www.natomanga.com/manga/advance-me",
+      status: "reading",
+      chapter: "20",
+      chapterUrl: "https://www.natomanga.com/manga/advance-me/chapter-20",
+      lastReadAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      deleted: false,
+      dirty: false,
+    },
+  };
+
+  const result = await bulkUpsert(
+    [
+      {
+        id: "natomanga.com:advance-me",
+        site: "natomanga.com",
+        siteName: "NatoManga",
+        slug: "advance-me",
+        title: "Advance Me",
+        seriesUrl: "https://www.natomanga.com/manga/advance-me",
+        status: "reading",
+        chapter: "22.5",
+        chapterUrl: "https://www.natomanga.com/manga/advance-me/chapter-22-5",
+      },
+    ],
+    { timestamp: "2026-09-22T12:00:00.000Z" }
+  );
+
+  assert.equal(result.advanced, 1);
+  assert.equal(data.series["natomanga.com:advance-me"].chapter, "22.5");
+  assert.match(data.series["natomanga.com:advance-me"].chapterUrl, /chapter-22-5$/);
+  assert.equal(
+    data.series["natomanga.com:advance-me"].lastReadAt,
+    "2026-09-22T12:00:00.000Z"
+  );
 });

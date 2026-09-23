@@ -78,6 +78,12 @@ function fromRow(row) {
   };
 }
 
+// The current Supabase schema requires a chapter and chapter URL. Plan-to-read
+// records remain local and dirty until the later nullable-column migration.
+function isCloudCompatible(rec) {
+  return typeof rec.chapter === "string" && typeof rec.chapterUrl === "string";
+}
+
 // --- Authenticated fetch (refreshes the token once on 401) ----------------
 
 async function authedFetch(url, opts = {}, allowRetry = true) {
@@ -172,7 +178,9 @@ export async function syncNow({ throttle = false } = {}) {
     // 3. PUSH. On the very first sync, push everything so an empty (or partial)
     //    cloud receives the full local library. Afterwards, push only dirty.
     const all = Object.values(next);
-    const pushRecords = firstTime ? all : all.filter((r) => r.dirty);
+    const pushRecords = (firstTime ? all : all.filter((r) => r.dirty)).filter(
+      isCloudCompatible
+    );
     const pushedIds = await push(pushRecords, userId);
     await markSynced(pushedIds);
 

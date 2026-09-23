@@ -5,6 +5,7 @@
 // JSON export/import for backup. Loaded as an ES module.
 
 import { parseChapterUrl } from "./parser.js";
+import { isNatoMangaUrl } from "./natomanga.js";
 import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
@@ -13,6 +14,8 @@ import { syncNow } from "./sync.js";
 const saveInfo = document.getElementById("saveInfo");
 const saveBtn = document.getElementById("saveBtn");
 const goSavedBtn = document.getElementById("goSavedBtn");
+const natoImportBtn = document.getElementById("natoImportBtn");
+const natoImportStatus = document.getElementById("natoImportStatus");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
 const scroller = document.getElementById("scroller");
@@ -33,6 +36,7 @@ const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
 let pendingTabId = null; // the tab `pending` came from, so we can navigate it
+let activeIsNatoManga = false;
 let allRecords = []; // every saved series (source of truth in memory)
 let filtered = []; // current search/sort view, the array we virtualize
 
@@ -87,10 +91,15 @@ async function refreshSaveArea() {
   const tab = await getActiveTab();
   pendingTabId = tab?.id ?? null;
   pending = tab?.url ? parseChapterUrl(tab.url) : null;
+  const onNatoManga = tab?.url ? isNatoMangaUrl(tab.url) : false;
+  activeIsNatoManga = onNatoManga;
+  natoImportBtn.hidden = !onNatoManga;
+  if (!onNatoManga) natoImportStatus.hidden = true;
 
   if (!pending) {
-    saveInfo.textContent =
-      "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
+    saveInfo.textContent = onNatoManga
+      ? "NatoManga detected. Save every bookmark using your current NatoManga session."
+      : "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
     saveBtn.disabled = true;
     setGoToSaved(null, null);
     return;
@@ -102,8 +111,11 @@ async function refreshSaveArea() {
   let note = "";
   let savedUrl = null;
   if (existing) {
-    const dir = compareChapters(pending.chapter, existing.chapter);
-    if (dir === 0) {
+    const dir = existing.chapter == null ? NaN : compareChapters(pending.chapter, existing.chapter);
+    if (existing.chapter == null) {
+      note = `<div class="save-note">Already in your library, but not started.</div>`;
+      saveBtn.textContent = "Start reading";
+    } else if (dir === 0) {
       note = `<div class="save-note same">Already saved at chapter ${escapeHtml(
         existing.chapter
       )}.</div>`;
@@ -156,6 +168,81 @@ saveBtn.addEventListener("click", async () => {
   await refreshSaveArea();
   runSync(); // push this save to the cloud if signed in (fire and forget)
 });
+
+// --- NatoManga bookmark import -------------------------------------------
+
+let importPollTimer = null;
+
+natoImportBtn.addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (!tab?.id || !tab.url || !isNatoMangaUrl(tab.url)) return;
+
+  showImportJob({ status: "running", pagesCompleted: 0, pagesTotal: 1, bookmarksFound: 0 });
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "import-natomanga-bookmarks",
+      tabId: tab.id,
+      pageUrl: tab.url,
+    });
+    if (!response?.ok) throw new Error(response?.error || "Bookmark import failed.");
+    if (!response.inProgress) {
+      await load();
+      const result = response.result;
+      showToast(
+        `Saved ${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
+          (result.advanced ? `, advanced ${result.advanced}` : "")
+      );
+      runSync();
+    }
+  } catch (err) {
+    showImportJob({ status: "error", error: err?.message || "Bookmark import failed." });
+    showToast("Import failed: " + (err?.message || "unknown error"));
+  } finally {
+    refreshImportState();
+  }
+});
+
+async function refreshImportState() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "get-natomanga-import-state" });
+    if (response?.ok && response.job) showImportJob(response.job);
+  } catch {
+    // The service worker may be starting; the next popup open retries.
+  }
+}
+
+function showImportJob(job) {
+  clearTimeout(importPollTimer);
+  const running = job?.status === "running";
+  natoImportBtn.disabled = running;
+  natoImportBtn.textContent = running ? "Saving bookmarks..." : "Save bookmarks";
+
+  if (!job || !activeIsNatoManga) {
+    natoImportStatus.hidden = true;
+    return;
+  }
+
+  natoImportStatus.hidden = false;
+  if (running) {
+    natoImportStatus.textContent =
+      `Importing page ${Math.min((job.pagesCompleted || 0) + 1, job.pagesTotal || 1)}` +
+      ` of ${job.pagesTotal || 1} · ${job.bookmarksFound || 0} found`;
+    importPollTimer = setTimeout(refreshImportState, 500);
+  } else if (job.status === "complete") {
+    const result = job.result || {};
+    if (!result.bookmarksFound) {
+      natoImportStatus.textContent =
+        "No bookmarks found. Check that this NatoManga account has bookmarks.";
+    } else {
+      natoImportStatus.textContent =
+        `${result.bookmarksFound} found · ${result.added || 0} new` +
+        (result.advanced ? ` · ${result.advanced} advanced` : "") +
+        (result.failedPages?.length ? ` · ${result.failedPages.length} page failed` : "");
+    }
+  } else if (job.status === "error") {
+    natoImportStatus.textContent = job.error || "Bookmark import failed.";
+  }
+}
 
 // Jump to the saved chapter. Deliberately does NOT save: it's the way out of a
 // mismatch that leaves your position untouched.
@@ -240,10 +327,15 @@ function renderItem(r) {
   row.className = "item";
   row.setAttribute("role", "listitem");
   row.tabIndex = 0; // keyboard focusable
-  row.setAttribute("aria-label", `${r.title}, chapter ${r.chapter}, ${r.siteName}`);
+  row.setAttribute(
+    "aria-label",
+    r.chapter == null
+      ? `${r.title}, plan to read, ${r.siteName}`
+      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`
+  );
 
   const open = () => {
-    const url = safeUrl(r.chapterUrl);
+    const url = safeUrl(r.chapterUrl) || safeUrl(r.seriesUrl);
     if (!url) {
       showToast("That series has no usable saved link.");
       return;
@@ -271,10 +363,10 @@ function renderItem(r) {
   meta.className = "item-sub";
   const chap = document.createElement("span");
   chap.className = "item-chapter";
-  chap.textContent = "Chapter " + r.chapter;
+  chap.textContent = r.chapter == null ? "Plan to read" : "Chapter " + r.chapter;
   const rest = document.createElement("span");
   rest.className = "item-meta";
-  const when = relativeTime(r.updatedAt);
+  const when = relativeTime(r.lastReadAt || (r.chapter == null ? null : r.updatedAt));
   rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
   meta.append(chap, rest);
 
@@ -475,7 +567,8 @@ sortSelect.addEventListener("change", computeView);
 // paths cannot race while rewriting the stored map.
 async function initialize() {
   await migrate();
-  await Promise.all([refreshSaveArea(), refreshAuthUI(), load()]);
+  await refreshSaveArea();
+  await Promise.all([refreshAuthUI(), refreshImportState(), load()]);
   runSync({ throttle: true });
 }
 

@@ -99,6 +99,20 @@ h1 {
   border-color: var(--muted);
 }
 
+.save-btn.secondary:disabled {
+  border-color: var(--surface-2);
+  background: transparent;
+  color: var(--muted);
+  cursor: wait;
+}
+
+.import-status {
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
 .controls {
   display: flex;
   gap: 8px;

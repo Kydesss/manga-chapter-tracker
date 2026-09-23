@@ -116,9 +116,14 @@ export function parseNatoBookmarkPage(
       return;
     }
 
+    const allAnchors = findElementsByTag(item.inner, "a");
     const titleAnchor =
       (titleElement.tag === "a" ? titleElement : null) ||
-      findElementsByTag(titleElement.inner, "a")[0];
+      findElementsByTag(titleElement.inner, "a")[0] ||
+      allAnchors.find((anchor) => {
+        const href = resolveUrl(getAttribute(anchor.attrs, "href"), baseUrl);
+        return href && parseSeriesUrl(href);
+      });
     const seriesUrl = resolveUrl(getAttribute(titleAnchor?.attrs, "href"), baseUrl);
     const title = cleanText(titleElement.inner);
     if (!seriesUrl || !parseSeriesUrl(seriesUrl)) {

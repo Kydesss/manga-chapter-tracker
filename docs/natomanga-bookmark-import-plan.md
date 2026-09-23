@@ -121,6 +121,11 @@ Selectors must be centralized, use reasonable fallbacks, and fail with a visible
 
 ## Phase 2: One-press **Save bookmarks** import
 
+**Implementation status:** Implemented on 2026-09-22, pending live validation
+against the user's authenticated NatoManga bookmark pages. The popup action,
+in-tab authenticated fetching, pagination, progress state, partial-failure
+reporting, and local-library refresh are wired up.
+
 ### 2.1 Detect NatoManga in the popup
 
 - Read the active tab URL.
@@ -192,6 +197,11 @@ The final report should include:
 - The importer never sends NatoManga credentials anywhere.
 
 ## Phase 3: Safe and efficient bulk storage
+
+**Implementation status:** Core storage work completed alongside Phase 2 on
+2026-09-22. `bulkUpsert` performs one read/write, deduplicates imports, advances
+to the furthest viewed chapter, preserves further local progress, and keeps
+unread bookmarks local until the cloud schema accepts nullable chapters.
 
 ### 3.1 Add `bulkUpsert`
 
