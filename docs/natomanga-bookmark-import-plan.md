@@ -7,6 +7,13 @@ tags:
 
 # Plan: NatoManga Bookmark Import and Library Expansion
 
+> **Status (2026-09-23):** Phases 1-3 are built on the `autoscraper` branch and were
+> reviewed before merge. The review's four blockers and follow-up bugs are fixed
+> ([Review before merge](#review-before-merge-2026-09-23), at the end). Before merging,
+> it still needs a live test with a signed-in NatoManga account and a real captured
+> fixture. MangaRead gets the same feature next:
+> [mangaread-bookmark-import-plan.md](./mangaread-bookmark-import-plan.md).
+
 ## Goal
 
 Let a user open NatoManga, press a single **Save bookmarks** button in Shiori, and import every manga in their NatoManga bookmark pages into the Shiori library. Extend that foundation with cover thumbnails, latest-chapter and update-date tracking, and a larger searchable bookmarks window.
@@ -435,3 +442,124 @@ Add tests for:
 ## Definition of done
 
 The feature set is complete when a signed-in NatoManga user can press **Save bookmarks** once, import every accessible bookmark without losing existing Shiori progress, browse the resulting library with search and cover thumbnails, see saved versus latest chapter information and update dates, and safely resume the desired manga from a responsive full-page library.
+
+## Review before merge (2026-09-23)
+
+Reviewed at `7a0acbf` (29 tests passing). The structure is sound: the parser is pure and
+fixture-tested, its selectors are in one place, the bulk write is one read and one write
+and only moves progress forward, NatoManga credentials are never touched, and the job
+survives the popup closing. Most problems come from the new "no chapter yet" state
+reaching code that was written when every record had a chapter. Items marked
+*reproduced* were confirmed by running the branch's own modules.
+
+**Resolution (same day).** Everything under "Fix before merge", "Should fix", and "Minor"
+is fixed, and each fix has a regression test. The suite went from 29 to 51 tests, and the
+new tests fail on `7a0acbf`. The popup changes were also smoke-tested in a browser
+against a mocked `chrome` API. Only the "Decide" items and the real captured fixture
+remain.
+
+### Fix before merge
+
+- [x] **Sync can undo cloud progress on this device** (reproduced).
+      `resolveConflict` in `merge.js` falls back to recency when a chapter doesn't parse,
+      and `null` doesn't parse. So a newer local plan record beats an older cloud record
+      at chapter 50, and the local result is `chapter: null`. The cloud keeps chapter 50,
+      but the pull cursor has already moved past that row, so this device won't recover
+      it until the series changes elsewhere. It happens on a first sign-in
+      after an import, or when another device read the series since the last pull. The
+      fix is the ROADMAP's rule "reading supersedes plan": a real chapter always beats no
+      chapter. Add a merge test for it.
+      **Fixed:** `resolveConflict` applies that rule before comparing chapters. Two
+      plan-to-read records still resolve by recency.
+- [x] **Saving a chapter resets imported data** (reproduced). The popup saves
+      `{ ...parseChapterUrl(url) }`, which has a slug-derived `title` and all metadata
+      fields set to `null`, and `upsert` spreads that over the stored record. An imported
+      "Witch & Mercenary" becomes "Witch And Mercenary" after one save. Covers and latest
+      chapters will be wiped the same way once Phases 4-5 collect them. The storage test
+      for this passes only because it calls `upsert` with a hand-made record instead of
+      the parser's output.
+      **Fixed:** `upsert` keeps known metadata when the new value is `null`. A shared
+      `pickTitle` rule (`merge.js`) means a slug-derived title never replaces a real one,
+      whether the change comes from a save, an import, or a sync. The new test uses the
+      parser's actual output.
+- [x] **JSON Import drops Plan-to-read records** (reproduced). `importRecords` skips any
+      record whose chapter isn't a string, so an Export followed by an Import silently
+      loses every unread bookmark. For a local-only library, Export is the only backup.
+      **Fixed:** Import accepts Plan-to-read records and brings older exports up to the
+      current record shape. It now resolves conflicts with the same `resolveConflict`
+      as sync, so the furthest chapter wins and a chapter beats Plan to read. Before,
+      the newer record won, so restoring a backup could move you back.
+- [x] **The last-viewed chapter is found by position.** The parser takes the first link
+      in the card's second `<span>`, and the count includes nested spans.
+      `NATOMANGA_SELECTORS.lastViewed` is declared but not used. If NatoManga reorders
+      the card, the *latest* chapter is imported as progress. Progress only moves
+      forward, so a later import can't undo that. Find the span by its "Viewed" label
+      instead, and add a sanitized capture of a real signed-in bookmark page as a
+      fixture. The current fixtures are hand-written.
+      **Fixed:** The span is now found by its label (`lastViewedLabel`). Spans labelled
+      as the newest chapter are skipped, and the link must be a chapter of the same
+      series. A card that has no matching span imports as Plan to read, with a
+      diagnostic. **Still open:** the real captured fixture, which needs a signed-in
+      session. If NatoManga's label isn't matched, every card will report
+      `missing-last-viewed-label`. Check the diagnostics on the first live import.
+
+### Should fix (all fixed)
+
+- **The login check overrides found bookmarks** (reproduced). Any `<form>` with "login"
+  in its class or action marks the whole page as signed out, even when bookmark cards are
+  on it. Treat a page as signed out only when it has no cards.
+  **Fixed:** the login check now runs only when a page has no cards.
+- **One bad character entity fails the page** (reproduced). `&#x110000;` is outside the
+  Unicode range, and `decodeEntities` throws a `RangeError` on it, so that page is
+  recorded as failed. Check the code-point range before decoding.
+  **Fixed:** invalid code points decode to U+FFFD, as browsers do.
+- **Nothing is saved until the last page.** If NatoManga signs the user out partway
+  through, or the service worker restarts, every page fetched so far is lost. If the tab
+  closes, each remaining page still makes three attempts before failing. Save after each
+  page (or checkpoint), and stop once the tab is gone. This also covers the unwritten
+  "import interruption and restart" test from the verification plan.
+  **Fixed:** each page is saved with `bulkUpsert` as it arrives. That's one write per
+  page, not per record, so this is a deliberate trade against Phase 3's "no repeated
+  full-map writes." A sign-out, a closed tab, or a tab that leaves NatoManga now stops
+  the import right away (no retries), and the message says which page it stopped on and
+  how many bookmarks were saved.
+- **Every imported row shows "just now".** `lastReadAt` is set to the import time, so
+  imported series all show "just now" and move to the top of the Recent sort. Use the
+  card's viewed date if it has one; otherwise consider `null`.
+  **Fixed:** imports leave `lastReadAt` unknown (`null`). An advanced series keeps its
+  last known read time. Recently read sorts by `lastReadAt` and puts unknown times last.
+  Schema v4 backfills `lastReadAt` from `updatedAt` on older records, so they still show
+  a time.
+- **Two writers with no lock.** The service worker now writes the library while the
+  popup can save or sync at the same time. The read-modify-writes in `storage.js` aren't
+  serialized, so a sync's `writeAll` that lands at the same moment as the import's final
+  write can undo it. This is rare today but will be common once background update checks
+  exist. `navigator.locks` works across both the popup and the worker.
+  **Fixed:** every read-modify-write in `storage.js` runs under one Web Lock, and sync
+  merges through a locked `updateMap`. Fixing this turned up a related race:
+  `markSynced` could mark a record synced even though it was saved again while the push
+  was in flight. It now clears `dirty` only when `updatedAt` hasn't changed since the
+  push.
+
+### Decide (still open)
+
+- **Re-importing restores removed series.** `bulkUpsert` treats a deleted record like a
+  missing one. Anything removed from Shiori but still bookmarked on NatoManga comes back
+  on the next import, and the restore syncs to other devices. Options: skip deleted
+  series and report them as "removed in Shiori", or ask the user.
+- **Plan-to-read records don't sync.** This is intended until the Supabase migration
+  (sketched in [cloud-sync-design.md](./cloud-sync-design.md)). Meanwhile these records
+  stay `dirty` forever and never reach other devices. Either say so in the UI, or ship
+  the migration with this feature.
+
+### Minor (fixed)
+
+- The popup's first progress poll can read the previous job's record. It then briefly
+  shows the old result and re-enables the button while the new import runs. Compare
+  `startedAt` to avoid this. **Fixed:** while the popup's own request is pending, a
+  stored job that isn't running is treated as the previous run's.
+- If the popup is reopened during an import, the status line updates when the import
+  finishes but the library list does not. **Fixed:** a popup watching an import now
+  reloads the list and syncs when it finishes.
+- Pages are fetched one at a time, not about two at once as planned. That's politer, so
+  keep it.

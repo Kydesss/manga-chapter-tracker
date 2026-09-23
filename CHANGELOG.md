@@ -8,6 +8,97 @@ tags:
 All notable changes to this project are documented here. Versions follow the
 extension's `manifest.json` version field.
 
+## [Unreleased]
+
+Jonah's `autoscraper` branch, targeting 0.4.0. It's not released yet: `manifest.json`
+stays at 0.3.3 until the import has been tested live with a signed-in NatoManga
+account. The design, phased plan, and pre-merge review are in
+[docs/natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md).
+
+### Added
+- **NatoManga bookmark import ("Save bookmarks").** On any natomanga.com page, the popup
+  shows a **Save bookmarks** button. One press imports every page of your NatoManga
+  bookmarks into the library, using the NatoManga session already signed in on that tab.
+  Shiori never asks for, sees, or stores NatoManga credentials. A bookmark is saved at
+  the chapter its "Viewed" entry links to; one without becomes **Plan to read**. The
+  newest-chapter link on the card is never used as your progress.
+  The import runs in the service worker, so closing the popup doesn't cancel it, and its
+  progress ("Importing page 3 of 18 · 42 found") and result show the next time the popup
+  opens. Each page is saved as soon as it's read. If the import stops partway, because
+  NatoManga signs you out or the tab closes or leaves NatoManga, the pages it finished
+  stay saved, and the popup says where it stopped. Pages are fetched one at a time with
+  a 15-second timeout. Timeouts and 429/5xx responses get up to three attempts with
+  backoff. A page that fails is reported, and the other pages are still imported.
+- **Plan to read.** You can now track a series before reading any of it
+  (`status: "plan"`). It shows as "Plan to read" in the library, and clicking it opens
+  the series page. On any of its chapters, the save area offers **Start reading**.
+  Export and Import (JSON) keep Plan-to-read series.
+- **Bulk import storage (`bulkUpsert`).** Merges an import page in one read and one
+  write, removes duplicates, and reports how many series were added, advanced, enriched,
+  unchanged, or skipped. Reading position only moves forward: an import can advance a
+  series but never move it back, and an unread bookmark never replaces a series you're
+  reading.
+- **Real titles stick.** Imported series use NatoManga's real title instead of one built
+  from the URL slug. Saving a chapter, re-importing, and syncing all keep it, along with
+  any cover or latest-chapter details already collected.
+
+### Changed
+- **Storage schema v3 and v4.** Every record gets a `status` and fields reserved for
+  upcoming covers and update tracking: `lastReadAt`, `coverUrl`, `latestChapter`,
+  `latestChapterUrl`, `latestPublishedAt`, and `metadataCheckedAt`. The metadata fields
+  are all `null` for now. A one-time migration fills them in on existing records
+  without touching their chapters. It also sets each record's `lastReadAt` from its
+  last save, and running it twice changes nothing.
+- **"Last read" now means last read.** A library row shows when your reading position
+  last changed (`lastReadAt`), not when the record last changed, and **Recently read**
+  sorts by it. An import can't tell when you read a chapter, so imported series show no
+  time and sort after the ones you've read.
+- **JSON Import resolves conflicts the way sync does.** The furthest chapter wins, and a
+  chapter beats Plan to read. Before, the newer record won, so restoring an old backup
+  could move you back.
+- **Sync: a chapter always beats no chapter.** A Plan-to-read record never replaces a
+  chapter from another device, even if it's newer. And a title built from the URL slug
+  never replaces a real one.
+- **New `scripting` permission.** It lets the bookmark-page requests run inside your
+  NatoManga tab, which is how they use your existing NatoManga session. Access to the tab
+  still comes from `activeTab`, which Chrome grants when you click the toolbar icon. No
+  new host permissions.
+- **Sync keeps the new data local for now.** The cloud table requires a chapter, so
+  Plan-to-read records stay on the device they were imported on. The new metadata fields
+  are kept during sync conflict resolution but not uploaded. A Supabase migration will
+  follow.
+
+### Fixed
+- **Migrations now run for local-only users.** Before, the schema migration ran only
+  during a sync, which never happens when you're signed out. The popup now runs it when
+  it opens, before any reads or syncing.
+- **A save made while a sync was uploading could skip the cloud.** If you saved a
+  series again while a sync was pushing it, the newer save could be marked as synced
+  and never uploaded. It now stays queued for the next sync.
+
+### Internal
+- `natomanga.js`: a NatoManga bookmark-page parser with no dependencies. Its pure
+  functions turn HTML strings into records, keep the selectors and labels in one place,
+  and report a diagnostic for each card they can't read. Tested against saved fixture
+  pages.
+- **One writer at a time.** The popup and the service worker both write the library, so
+  every read-modify-write in `storage.js` now runs under one Web Lock
+  (`navigator.locks`). Sync merges through a locked `updateMap`.
+- Tests: 12 → 51. New coverage:
+  - NatoManga parsing: label-based last-viewed matching, pagination, login detection,
+    and malformed input.
+  - Storage: the schema migration, bulk-import rules, JSON import round trips, and
+    concurrent writes.
+  - Sync: the conflict rules for Plan to read and titles.
+  - The background import job: partial sign-out and a closed tab.
+
+### Docs
+- Pre-merge review of the branch added to the NatoManga plan. All four blockers and the
+  follow-up bugs are fixed. New
+  [MangaRead import plan](./docs/mangaread-bookmark-import-plan.md) (planning only).
+  Roadmap, README, CONTRIBUTING, sync design, and process log updated for site bookmark
+  import.
+
 ## [0.3.3] - 2026-09-08
 
 ### Added
