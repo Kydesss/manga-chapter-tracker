@@ -56,6 +56,7 @@ export function parseChapterUrl(rawUrl) {
 
   const slug = match[1];
   const chapterRaw = match[2];
+  const timestamp = new Date().toISOString();
 
   return {
     id: `${site.id}:${slug}`, // stable key => "save" is an upsert, never a dupe
@@ -66,7 +67,14 @@ export function parseChapterUrl(rawUrl) {
     chapter: chapterLabel(chapterRaw),
     chapterUrl: url.href,
     seriesUrl: `${url.origin}/manga/${slug}`,
-    updatedAt: new Date().toISOString(),
+    status: "reading",
+    lastReadAt: timestamp,
+    coverUrl: null,
+    latestChapter: null,
+    latestChapterUrl: null,
+    latestPublishedAt: null,
+    metadataCheckedAt: null,
+    updatedAt: timestamp,
   };
 }
 

@@ -5,7 +5,7 @@
 // JSON export/import for backup. Loaded as an ES module.
 
 import { parseChapterUrl } from "./parser.js";
-import { getAll, getOne, upsert, remove, importRecords } from "./storage.js";
+import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
 
@@ -175,6 +175,8 @@ goSavedBtn.addEventListener("click", async () => {
 // --- Data load + view computation -----------------------------------------
 
 async function load() {
+  // Migrations must also run for local-only users; sync may never be invoked.
+  await migrate();
   allRecords = await getAll();
   computeView();
 }
@@ -469,8 +471,12 @@ async function runSync(opts = {}) {
 searchInput.addEventListener("input", debounce(computeView, 150));
 sortSelect.addEventListener("change", computeView);
 
-// Initial paint, then a throttled sync on open (no-op when signed out).
-refreshSaveArea();
-refreshAuthUI();
-load();
-runSync({ throttle: true });
+// Migrate before any reads or sync work so local-only and signed-in startup
+// paths cannot race while rewriting the stored map.
+async function initialize() {
+  await migrate();
+  await Promise.all([refreshSaveArea(), refreshAuthUI(), load()]);
+  runSync({ throttle: true });
+}
+
+initialize();

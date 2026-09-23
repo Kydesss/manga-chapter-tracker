@@ -63,6 +63,15 @@ function fromRow(row) {
     chapterUrl: row.chapter_url,
     seriesUrl: row.series_url,
     siteName: SITE_NAME[row.site] || row.site,
+    status: row.chapter == null ? "plan" : "reading",
+    // Before the dedicated cloud column exists, updated_at is the best
+    // available approximation for when this synced chapter was saved.
+    lastReadAt: row.chapter == null ? null : row.updated_at,
+    coverUrl: null,
+    latestChapter: null,
+    latestChapterUrl: null,
+    latestPublishedAt: null,
+    metadataCheckedAt: null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deleted: !!row.deleted,

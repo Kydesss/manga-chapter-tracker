@@ -73,6 +73,15 @@ export function resolveConflict(local, remote) {
     // chapter and its URL travel together from whichever side is furthest.
     chapter: chapterSource.chapter,
     chapterUrl: chapterSource.chapterUrl,
+    // Phase 1 metadata remains local-only until the cloud schema is expanded.
+    // Preserve it through sync conflict resolution instead of dropping it.
+    status: chapterSource.status || (chapterSource.chapter == null ? "plan" : "reading"),
+    lastReadAt: chapterSource.lastReadAt ?? null,
+    coverUrl: local.coverUrl ?? remote.coverUrl ?? null,
+    latestChapter: local.latestChapter ?? remote.latestChapter ?? null,
+    latestChapterUrl: local.latestChapterUrl ?? remote.latestChapterUrl ?? null,
+    latestPublishedAt: local.latestPublishedAt ?? remote.latestPublishedAt ?? null,
+    metadataCheckedAt: local.metadataCheckedAt ?? remote.metadataCheckedAt ?? null,
     createdAt,
     updatedAt,
     deleted,

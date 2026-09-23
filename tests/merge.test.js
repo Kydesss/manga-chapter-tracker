@@ -113,3 +113,18 @@ test("when cloud already matches, nothing is marked dirty or changed", () => {
   const { changedIds } = mergeRemoteIntoLocal(local, [r]);
   assert.equal(changedIds.length, 0);
 });
+
+test("local-only metadata survives a cloud conflict", () => {
+  const local = rec({
+    chapter: "12",
+    coverUrl: "https://img.example/cover.jpg",
+    latestChapter: "15",
+    metadataCheckedAt: "2026-06-01T00:00:00Z",
+  });
+  const remote = rec({ chapter: "13", updatedAt: "2026-07-01T00:00:00Z" });
+  const merged = resolveConflict(local, remote);
+  assert.equal(merged.chapter, "13");
+  assert.equal(merged.coverUrl, "https://img.example/cover.jpg");
+  assert.equal(merged.latestChapter, "15");
+  assert.equal(merged.metadataCheckedAt, "2026-06-01T00:00:00Z");
+});

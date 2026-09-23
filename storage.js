@@ -13,7 +13,17 @@ const SCHEMA_KEY = "schemaVersion";
 const CURSOR_KEY = "lastSyncCursor"; // server timestamp of the last pulled change
 const SNAPSHOT_KEY = "preSyncSnapshot"; // safety backup before first-ever sync
 
-const CURRENT_SCHEMA = 2; // 1 = pre-sync records (no deleted/dirty fields)
+const CURRENT_SCHEMA = 3; // 2 = sync fields; 3 = status + series metadata fields
+
+const SERIES_DEFAULTS = {
+  status: "reading",
+  lastReadAt: null,
+  coverUrl: null,
+  latestChapter: null,
+  latestChapterUrl: null,
+  latestPublishedAt: null,
+  metadataCheckedAt: null,
+};
 
 function nowISO() {
   return new Date().toISOString();
@@ -30,8 +40,9 @@ async function writeMap(map) {
 
 // --- Migration ------------------------------------------------------------
 
-// Backfill sync fields on records created before v0.2.x. Runs once, guarded by
-// the stored schema version. Must run before any sync path is reachable.
+// Backfill sync fields on records created before v0.2.x and metadata fields on
+// records created before v0.4.x. Runs once, guarded by the stored schema
+// version. Must run before any sync path is reachable.
 export async function migrate() {
   const { [SCHEMA_KEY]: version } = await chrome.storage.local.get(SCHEMA_KEY);
   if (version === CURRENT_SCHEMA) return { migrated: 0 };
@@ -40,9 +51,27 @@ export async function migrate() {
   let migrated = 0;
   for (const id of Object.keys(map)) {
     const r = map[id];
-    if (r.deleted === undefined || r.dirty === undefined) {
+    const needsMigration =
+      r.deleted === undefined ||
+      r.dirty === undefined ||
+      r.status === undefined ||
+      r.lastReadAt === undefined ||
+      r.coverUrl === undefined ||
+      r.latestChapter === undefined ||
+      r.latestChapterUrl === undefined ||
+      r.latestPublishedAt === undefined ||
+      r.metadataCheckedAt === undefined;
+
+    if (needsMigration) {
       // Defaults first, then spread the record so any existing values win.
-      map[id] = { deleted: false, dirty: false, ...r };
+      // Legacy records all contain a chapter and therefore become "reading".
+      map[id] = {
+        deleted: false,
+        dirty: false,
+        ...SERIES_DEFAULTS,
+        status: r.chapter == null ? "plan" : "reading",
+        ...r,
+      };
       migrated++;
     }
   }
@@ -96,7 +125,10 @@ export async function upsert(record) {
   const map = await readMap();
   const existing = map[record.id];
   map[record.id] = {
+    ...SERIES_DEFAULTS,
+    ...existing,
     ...record,
+    status: record.chapter == null ? record.status || "plan" : "reading",
     deleted: false,
     dirty: true,
     createdAt: existing?.createdAt || record.updatedAt,
