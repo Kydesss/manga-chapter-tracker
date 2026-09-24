@@ -15,6 +15,7 @@ const saveInfo = document.getElementById("saveInfo");
 const saveBtn = document.getElementById("saveBtn");
 const goSavedBtn = document.getElementById("goSavedBtn");
 const natoImportBtn = document.getElementById("natoImportBtn");
+const natoRefreshBtn = document.getElementById("natoRefreshBtn");
 const natoImportStatus = document.getElementById("natoImportStatus");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
@@ -31,7 +32,7 @@ const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
 const syncDot = document.getElementById("syncDot");
 
-const ROW_H = 56; // must match --row-h in popup.css
+const ROW_H = 72; // must match the .item height in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
@@ -94,6 +95,7 @@ async function refreshSaveArea() {
   const onNatoManga = tab?.url ? isNatoMangaUrl(tab.url) : false;
   activeIsNatoManga = onNatoManga;
   natoImportBtn.hidden = !onNatoManga;
+  natoRefreshBtn.hidden = !onNatoManga;
   if (!onNatoManga) natoImportStatus.hidden = true;
 
   if (!pending) {
@@ -177,24 +179,34 @@ let importPollTimer = null;
 let importRequestPending = false; // this popup started an import and awaits its reply
 let lastJobStatus = null; // to notice a watched import finishing
 
-natoImportBtn.addEventListener("click", async () => {
+natoImportBtn.addEventListener("click", () => runNatoOperation("import-natomanga-bookmarks"));
+natoRefreshBtn.addEventListener("click", () => runNatoOperation("refresh-natomanga-updates"));
+
+// Import and Refresh run the same background job: every bookmark page, then a
+// capped series-page pass for missing covers and latest chapters.
+async function runNatoOperation(type) {
   const tab = await getActiveTab();
   if (!tab?.id || !tab.url || !isNatoMangaUrl(tab.url)) return;
 
+  const refreshing = type === "refresh-natomanga-updates";
   importRequestPending = true;
-  showImportJob({ status: "running", pagesCompleted: 0, pagesTotal: 1, bookmarksFound: 0 });
+  showImportJob({
+    status: "running",
+    operation: refreshing ? "refresh" : "import",
+    phase: "bookmarks",
+    pagesCompleted: 0,
+    pagesTotal: 1,
+    bookmarksFound: 0,
+  });
   let response = null;
   try {
-    response = await chrome.runtime.sendMessage({
-      type: "import-natomanga-bookmarks",
-      tabId: tab.id,
-      pageUrl: tab.url,
-    });
+    response = await chrome.runtime.sendMessage({ type, tabId: tab.id, pageUrl: tab.url });
     if (!response?.ok) throw new Error(response?.error || "Bookmark import failed.");
     if (!response.inProgress) {
       const result = response.result;
       showToast(
-        `Saved ${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
+        `${refreshing ? "Refreshed" : "Saved"} ` +
+          `${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
           (result.advanced ? `, advanced ${result.advanced}` : "")
       );
     }
@@ -216,7 +228,21 @@ natoImportBtn.addEventListener("click", async () => {
     }
     refreshImportState();
   }
-});
+}
+
+// "+N" when the latest known chapter is ahead of the saved one, "NEW" when the
+// labels can't be ranked but differ, nothing otherwise.
+function updateBadge(record) {
+  if (record.chapter == null || record.latestChapter == null) return null;
+  const saved = Number.parseFloat(record.chapter);
+  const latest = Number.parseFloat(record.latestChapter);
+  if (!Number.isNaN(saved) && !Number.isNaN(latest)) {
+    const difference = latest - saved;
+    if (difference <= 0) return null;
+    return `+${Number.isInteger(difference) ? difference : difference.toFixed(1)}`;
+  }
+  return record.chapter === record.latestChapter ? null : "NEW";
+}
 
 async function refreshImportState() {
   try {
@@ -245,8 +271,11 @@ function showImportJob(job) {
     runSync();
   }
   lastJobStatus = job?.status ?? null;
+  const refreshing = job?.operation === "refresh";
   natoImportBtn.disabled = running;
-  natoImportBtn.textContent = running ? "Saving bookmarks..." : "Save bookmarks";
+  natoRefreshBtn.disabled = running;
+  natoImportBtn.textContent = running && !refreshing ? "Saving bookmarks..." : "Save bookmarks";
+  natoRefreshBtn.textContent = running && refreshing ? "Refreshing updates..." : "Refresh updates";
 
   if (!job || !activeIsNatoManga) {
     natoImportStatus.hidden = true;
@@ -255,9 +284,19 @@ function showImportJob(job) {
 
   natoImportStatus.hidden = false;
   if (running) {
-    natoImportStatus.textContent =
-      `Importing page ${Math.min((job.pagesCompleted || 0) + 1, job.pagesTotal || 1)}` +
-      ` of ${job.pagesTotal || 1} · ${job.bookmarksFound || 0} found`;
+    if (job.phase === "metadata") {
+      natoImportStatus.textContent =
+        `Checking series details ${Math.min(
+          (job.seriesPagesCompleted || 0) + 1,
+          job.seriesPagesTotal || 1
+        )} of ${job.seriesPagesTotal || 1}`;
+    } else {
+      natoImportStatus.textContent =
+        `Scanning bookmarks page ${Math.min(
+          (job.pagesCompleted || 0) + 1,
+          job.pagesTotal || 1
+        )} of ${job.pagesTotal || 1} · ${job.bookmarksFound || 0} found`;
+    }
     importPollTimer = setTimeout(refreshImportState, 500);
   } else if (job.status === "complete") {
     const result = job.result || {};
@@ -268,6 +307,7 @@ function showImportJob(job) {
       natoImportStatus.textContent =
         `${result.bookmarksFound} found · ${result.added || 0} new` +
         (result.advanced ? ` · ${result.advanced} advanced` : "") +
+        (result.seriesPagesChecked ? ` · ${result.seriesPagesChecked} details checked` : "") +
         (result.failedPages?.length ? ` · ${result.failedPages.length} page failed` : "");
     }
   } else if (job.status === "error") {
@@ -361,15 +401,17 @@ scroller.addEventListener("scroll", () => {
 });
 
 function renderItem(r) {
+  const badgeLabel = updateBadge(r);
   const row = document.createElement("div");
   row.className = "item";
   row.setAttribute("role", "listitem");
   row.tabIndex = 0; // keyboard focusable
   row.setAttribute(
     "aria-label",
-    r.chapter == null
+    (r.chapter == null
       ? `${r.title}, plan to read, ${r.siteName}`
-      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`
+      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`) +
+      (badgeLabel ? `, latest chapter ${r.latestChapter}` : "")
   );
 
   const open = () => {
@@ -388,15 +430,37 @@ function renderItem(r) {
     }
   });
 
+  // Cover thumbnail, lazy-loaded, with the Shiori mark when missing or broken.
+  const cover = document.createElement("img");
+  cover.className = "item-cover";
+  cover.alt = "";
+  cover.loading = "lazy";
+  cover.src = safeUrl(r.coverUrl) || chrome.runtime.getURL("icons/logo.svg");
+  cover.addEventListener("error", () => {
+    const fallback = chrome.runtime.getURL("icons/logo.svg");
+    if (cover.src !== fallback) cover.src = fallback;
+  });
+
   const main = document.createElement("div");
   main.className = "item-main";
 
-  // Primary: title.
+  // Primary: title, with an update badge when newer chapters are out.
   const title = document.createElement("div");
   title.className = "item-title";
   title.textContent = r.title;
+  const titleLine = document.createElement("div");
+  titleLine.className = "item-title-line";
+  titleLine.appendChild(title);
+  if (badgeLabel) {
+    const badge = document.createElement("span");
+    badge.className = "update-badge";
+    badge.textContent = badgeLabel;
+    badge.title = `Latest chapter: ${r.latestChapter}`;
+    titleLine.appendChild(badge);
+  }
 
-  // Secondary: chapter (emphasized), then site and last-read (tertiary, muted).
+  // Secondary: chapter (emphasized), then site, last-read, and the latest
+  // chapter when known (tertiary, muted).
   const meta = document.createElement("div");
   meta.className = "item-sub";
   const chap = document.createElement("span");
@@ -405,10 +469,15 @@ function renderItem(r) {
   const rest = document.createElement("span");
   rest.className = "item-meta";
   const when = relativeTime(r.lastReadAt); // unknown for plan-to-read and imports
-  rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
+  const latestWhen = relativeTime(r.latestPublishedAt);
+  rest.textContent =
+    (when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`) +
+    (r.latestChapter
+      ? ` · Latest ${r.latestChapter}${latestWhen ? ` (${latestWhen})` : ""}`
+      : "");
   meta.append(chap, rest);
 
-  main.append(title, meta);
+  main.append(titleLine, meta);
 
   const del = document.createElement("button");
   del.className = "delete-btn";
@@ -423,7 +492,7 @@ function renderItem(r) {
     runSync(); // push the tombstone so the deletion propagates
   });
 
-  row.append(main, del);
+  row.append(cover, main, del);
   return row;
 }
 

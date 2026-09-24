@@ -21,12 +21,22 @@ const pagination = (lastPage) =>
 
 let instance = 0;
 
+// A minimal series page, for the metadata phase that fills in missing covers.
+const seriesPage = (slug, { heading = true } = {}) => `
+  <div class="manga-info-pic"><img src="/covers/${slug}.jpg"></div>
+  <div class="manga-info-text">${heading ? `<h1>${slug}</h1>` : ""}</div>
+  <div class="chapter-list"><a href="/manga/${slug}/chapter-99">Chapter 99</a> 1 day ago</div>
+`;
+
 // Run one import against a mocked chrome API and a fresh copy of background.js.
-// `pages` maps a bookmark page number to its HTML. `tabUrl(n)` returns the tab's
-// URL on the nth chrome.tabs.get call; throwing simulates a closed tab.
-async function runImport({ pages, tabUrl = () => TAB_URL }) {
+// `pages` maps a bookmark page number to its HTML; series pages are generated.
+// `fetched` lists bookmark page numbers in order, `seriesFetched` series slugs.
+// `tabUrl(n)` returns the tab's URL on the nth chrome.tabs.get call; throwing
+// simulates a closed tab.
+async function runImport({ pages, tabUrl = () => TAB_URL, seriesHtml = seriesPage }) {
   const data = {};
   const fetched = [];
+  const seriesFetched = [];
   let tabCalls = 0;
   let listener;
 
@@ -46,13 +56,17 @@ async function runImport({ pages, tabUrl = () => TAB_URL }) {
     scripting: {
       async executeScript({ args }) {
         const url = new URL(args[0]);
-        const pageNumber = url.searchParams.get("page");
-        fetched.push(Number(pageNumber));
-        return [
-          {
-            result: { ok: true, status: 200, url: url.href, html: pages[pageNumber] },
-          },
-        ];
+        let html;
+        if (url.pathname.startsWith("/manga/")) {
+          const slug = url.pathname.split("/").filter(Boolean)[1];
+          seriesFetched.push(slug);
+          html = seriesHtml(slug);
+        } else {
+          const pageNumber = url.searchParams.get("page");
+          fetched.push(Number(pageNumber));
+          html = pages[pageNumber];
+        }
+        return [{ result: { ok: true, status: 200, url: url.href, html } }];
       },
     },
     storage: {
@@ -82,11 +96,11 @@ async function runImport({ pages, tabUrl = () => TAB_URL }) {
     );
     if (keepAlive !== true) reject(new Error("message channel was not kept alive"));
   });
-  return { response, data, fetched };
+  return { response, data, fetched, seriesFetched };
 }
 
 test("background import fetches every page and stores each last-viewed chapter", async () => {
-  const { response, data } = await runImport({
+  const { response, data, seriesFetched } = await runImport({
     pages: {
       1: card("first-series", "First Series", "3") + pagination(2),
       2: card("second-series", "Second Series", "7-5"),
@@ -100,6 +114,24 @@ test("background import fetches every page and stores each last-viewed chapter",
   assert.equal(data.series["natomanga.com:first-series"].chapter, "3");
   assert.equal(data.series["natomanga.com:second-series"].chapter, "7.5");
   assert.equal(data.natomangaImportJob.status, "complete");
+
+  // The cards have no covers, so the metadata phase checks both series pages.
+  assert.deepEqual(seriesFetched, ["first-series", "second-series"]);
+  assert.equal(response.result.seriesPagesChecked, 2);
+  assert.match(data.series["natomanga.com:first-series"].coverUrl, /first-series\.jpg$/);
+  assert.equal(data.series["natomanga.com:first-series"].latestChapter, "99");
+});
+
+test("a series page without a heading still saves its cover and keeps the title", async () => {
+  const { response, data } = await runImport({
+    pages: { 1: card("no-heading", "No Heading", "2") },
+    seriesHtml: (slug) => seriesPage(slug, { heading: false }),
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.seriesPagesChecked, 1);
+  assert.match(data.series["natomanga.com:no-heading"].coverUrl, /no-heading\.jpg$/);
+  assert.equal(data.series["natomanga.com:no-heading"].title, "No Heading");
 });
 
 test("a sign-out partway through keeps the pages already saved", async () => {

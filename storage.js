@@ -257,8 +257,11 @@ export async function bulkUpsert(records, { timestamp = nowISO() } = {}) {
         continue;
       }
 
-      merged.updatedAt = timestamp;
-      merged.dirty = true;
+      // Covers and latest chapters stay local for now, so a metadata-only
+      // change neither bumps updatedAt nor queues a sync.
+      const syncRelevantChange = !sameImportSyncContent(existing, merged);
+      merged.updatedAt = syncRelevantChange ? timestamp : existing.updatedAt;
+      merged.dirty = syncRelevantChange ? true : existing.dirty === true;
       map[incoming.id] = merged;
       if (shouldAdvance) advanced++;
       else enriched++;
@@ -341,6 +344,22 @@ const IMPORT_CONTENT_FIELDS = [
 
 function sameImportContent(a, b) {
   return IMPORT_CONTENT_FIELDS.every((field) => (a[field] ?? null) === (b[field] ?? null));
+}
+
+// The subset of fields the cloud stores (see sync.js toRow), plus status.
+const IMPORT_SYNC_FIELDS = [
+  "site",
+  "slug",
+  "title",
+  "seriesUrl",
+  "status",
+  "chapter",
+  "chapterUrl",
+  "deleted",
+];
+
+function sameImportSyncContent(a, b) {
+  return IMPORT_SYNC_FIELDS.every((field) => (a[field] ?? null) === (b[field] ?? null));
 }
 
 // Soft delete: tombstone the record so the deletion can sync. The UI filters

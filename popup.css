@@ -164,13 +164,22 @@ h1 {
   position: absolute;
   left: 0;
   right: 0;
-  height: var(--row-h, 56px);
+  height: var(--row-h, 72px);
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 9px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+
+.item-cover {
+  width: 40px;
+  height: 54px;
+  flex: 0 0 40px;
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+  background: var(--surface-2);
 }
 
 .item:hover {
@@ -187,6 +196,28 @@ h1 {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.item-title-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.item-title-line .item-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .item-sub {

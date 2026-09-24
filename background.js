@@ -10,12 +10,17 @@
 // respond. The popup just sends a message and reads the result.
 
 import { signInWithGoogle, signOut } from "./auth.js";
-import { parseNatoBookmarkPage, isNatoMangaUrl } from "./natomanga.js";
-import { bulkUpsert, migrate } from "./storage.js";
+import {
+  parseNatoBookmarkPage,
+  parseNatoSeriesPage,
+  isNatoMangaUrl,
+} from "./natomanga.js";
+import { bulkUpsert, getAll, migrate } from "./storage.js";
 
 const IMPORT_JOB_KEY = "natomangaImportJob";
 const MAX_IMPORT_PAGES = 1000;
 const MAX_RETRIES = 3;
+const MAX_SERIES_ENRICH_PER_RUN = 20;
 const COUNT_FIELDS = ["added", "advanced", "enriched", "unchanged", "skipped", "processed"];
 let importRunning = false;
 
@@ -55,7 +60,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: errorMessage(err) }));
     return true;
   }
-  if (msg?.type === "import-natomanga-bookmarks") {
+  if (
+    msg?.type === "import-natomanga-bookmarks" ||
+    msg?.type === "refresh-natomanga-updates"
+  ) {
     if (importRunning) {
       chrome.storage.local.get(IMPORT_JOB_KEY).then((result) =>
         sendResponse({ ok: true, inProgress: true, job: result[IMPORT_JOB_KEY] || null })
@@ -80,7 +88,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-async function importNatoMangaBookmarks({ tabId, pageUrl }) {
+async function importNatoMangaBookmarks({ tabId, pageUrl, type }) {
   if (!Number.isInteger(tabId) || !isNatoMangaUrl(pageUrl)) {
     throw new Error("Open NatoManga in the active tab before importing bookmarks.");
   }
@@ -89,9 +97,12 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
   await migrate();
   const startedAt = nowISO();
   const bookmarkUrl = new URL("/bookmark?page=1", pageUrl).href;
+  const operation = type === "refresh-natomanga-updates" ? "refresh" : "import";
   await chrome.storage.local.set({
     [IMPORT_JOB_KEY]: {
       status: "running",
+      operation,
+      phase: "bookmarks",
       startedAt,
       updatedAt: startedAt,
       pagesCompleted: 0,
@@ -166,6 +177,7 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
     pagesCompleted,
     pagesTotal,
     bookmarksFound,
+    seriesPagesChecked: 0,
     failedPages,
     diagnostics,
   };
@@ -185,13 +197,77 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
     throw new Error("No bookmarks could be imported because every bookmark page failed.");
   }
 
+  // Metadata phase: fill in covers and latest chapters that the bookmark cards
+  // didn't have, from a capped number of series pages per run.
+  const metadata = await enrichFromSeriesPages(tabId, bookmarkUrl, diagnostics);
+  for (const field of ["advanced", "enriched", "unchanged", "skipped"]) {
+    result[field] += metadata.counts[field] ?? 0;
+  }
+  if (metadata.counts.total != null) result.total = metadata.counts.total;
+  result.seriesPagesChecked = metadata.checked;
+
   await updateImportJob({
     status: "complete",
+    phase: "complete",
     finishedAt: nowISO(),
     result,
     error: null,
   });
   return result;
+}
+
+// Fetch series pages for NatoManga series still missing a cover or latest
+// chapter, at most MAX_SERIES_ENRICH_PER_RUN per run. This is best-effort: a
+// failed page is a diagnostic, and a closed tab just ends the phase, because
+// the bookmarks themselves are already saved.
+async function enrichFromSeriesPages(tabId, bookmarkUrl, diagnostics) {
+  const needsSeriesPage = (await getAll())
+    .filter(
+      (record) =>
+        record.site === "natomanga.com" &&
+        (!record.coverUrl || !record.latestChapter || !record.latestChapterUrl)
+    )
+    .slice(0, MAX_SERIES_ENRICH_PER_RUN);
+  if (!needsSeriesPage.length) return { counts: {}, checked: 0 };
+
+  await updateImportJob({
+    phase: "metadata",
+    seriesPagesCompleted: 0,
+    seriesPagesTotal: needsSeriesPage.length,
+  });
+
+  const timestamp = nowISO();
+  const enrichments = [];
+  let checked = 0;
+  for (const record of needsSeriesPage) {
+    try {
+      // Fetch from the tab's own origin: a series saved from natomanga.com would
+      // otherwise be a cross-origin request from www.natomanga.com, and fail.
+      const seriesUrl = new URL(new URL(record.seriesUrl).pathname, bookmarkUrl).href;
+      const response = await fetchPageInTab(tabId, seriesUrl);
+      const parsed = parseNatoSeriesPage(response.html, response.url || seriesUrl, {
+        timestamp,
+      });
+      diagnostics.push(...parsed.diagnostics.map((value) => `series-${record.slug}:${value}`));
+      const found = parsed.metadata;
+      if (found && (found.coverUrl || found.latestChapter || found.title)) {
+        // A page without a heading must not blank the title: bulkUpsert would
+        // then reject the whole record, cover included.
+        enrichments.push({ ...record, ...found, title: found.title || record.title });
+      }
+    } catch (err) {
+      diagnostics.push(`series-${record.slug}:${errorMessage(err)}`);
+      if (err?.stop) break;
+    }
+    checked++;
+    await updateImportJob({
+      seriesPagesCompleted: checked,
+      seriesPagesTotal: needsSeriesPage.length,
+    });
+  }
+
+  const counts = enrichments.length ? await bulkUpsert(enrichments, { timestamp }) : {};
+  return { counts, checked };
 }
 
 // Stop (instead of retrying) once the import's tab is closed or leaves

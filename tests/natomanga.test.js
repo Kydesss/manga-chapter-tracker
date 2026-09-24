@@ -6,7 +6,9 @@ import {
   findLastBookmarkPage,
   isNatoMangaUrl,
   normalizeNatoBookmark,
+  parseNatoDate,
   parseNatoBookmarkPage,
+  parseNatoSeriesPage,
   parseSeriesUrl,
 } from "../natomanga.js";
 
@@ -51,13 +53,19 @@ test("saved bookmark fixture parses reading and unread records", async () => {
   assert.equal(result.records[0].status, "reading");
   assert.equal(result.records[0].chapter, "348.5");
   assert.equal(result.records[0].lastReadAt, null); // an import is not a read
-  assert.equal(result.records[0].latestChapter, null);
+  assert.equal(result.records[0].coverUrl, "https://www.natomanga.com/uploads/blue-lock.jpg");
+  assert.equal(result.records[0].latestChapter, "350");
+  assert.match(result.records[0].latestChapterUrl, /chapter-350$/);
+  assert.equal(result.records[0].latestPublishedAt, "2026-09-22T10:00:00.000Z");
 
   assert.equal(result.records[1].title, "Witch & Mercenary");
   assert.equal(result.records[1].status, "plan");
   assert.equal(result.records[1].chapter, null);
   assert.equal(result.records[1].chapterUrl, null);
   assert.equal(result.records[1].lastReadAt, null);
+  assert.equal(result.records[1].coverUrl, "https://cdn.example/witch.jpg");
+  assert.equal(result.records[1].latestChapter, "12");
+  assert.ok(result.records[1].latestPublishedAt);
 });
 
 test("pagination ignores labels and uses the greatest page query", async () => {
@@ -179,4 +187,52 @@ test("normalization does not mistake the latest chapter for reading progress", (
   assert.equal(record.status, "plan");
   assert.equal(record.chapter, null);
   assert.equal(record.updatedAt, TIMESTAMP);
+});
+
+test("series-page fallback parses title, cover, latest chapter, and date", async () => {
+  const html = await fixture("natomanga-series.html");
+  const result = parseNatoSeriesPage(
+    html,
+    "https://www.natomanga.com/manga/blue-lock",
+    { timestamp: TIMESTAMP }
+  );
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.metadata.title, "Blue Lock");
+  assert.equal(
+    result.metadata.coverUrl,
+    "https://www.natomanga.com/uploads/manga/blue-lock.jpg"
+  );
+  assert.equal(result.metadata.latestChapter, "351");
+  assert.match(result.metadata.latestChapterUrl, /chapter-351$/);
+  assert.ok(result.metadata.latestPublishedAt);
+  assert.equal(result.metadata.metadataCheckedAt, TIMESTAMP);
+});
+
+test("the series-page fallback ignores other series' chapter links", () => {
+  const result = parseNatoSeriesPage(
+    `<div class="chapter-list">
+       <a href="/manga/other-series/chapter-900">Chapter 900</a>
+       <a href="/manga/blue-lock/chapter-351">Chapter 351</a>
+     </div>`,
+    "https://www.natomanga.com/manga/blue-lock",
+    { timestamp: TIMESTAMP }
+  );
+  assert.equal(result.metadata.latestChapter, "351");
+});
+
+test("a Latest link to another series doesn't become the latest chapter", () => {
+  const result = parse(
+    page(`
+      <a class="bm-title" href="/manga/blue-lock">Blue Lock</a>
+      <span>Latest: <a href="/manga/other-series/chapter-900">Chapter 900</a></span>
+      <span>Viewed: <a href="/manga/blue-lock/chapter-12">Chapter 12</a></span>
+    `)
+  );
+  assert.equal(result.records[0].chapter, "12");
+  assert.equal(result.records[0].latestChapter, null);
+});
+
+test("NatoManga dates parse relative and short site formats", () => {
+  assert.equal(parseNatoDate("Updated 2 hours ago", TIMESTAMP), "2026-09-22T10:00:00.000Z");
+  assert.equal(parseNatoDate("09-20 08:30", TIMESTAMP), "2026-09-20T08:30:00.000Z");
 });
