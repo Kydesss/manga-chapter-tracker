@@ -30,7 +30,14 @@ grows into a small cross-platform service.
 
 - **Shipped:** local-first MVP (v0.1.x), cloud accounts + cross-device sync (v0.2.x,
   validated cross-device), and the Shiori brand + design system (v0.3.x).
-- **Supported sites:** mangaread.org, natomanga.com.
+- **In review:** NatoManga bookmark import on the `autoscraper` branch (targeting
+  v0.4.0): a one-press import of a site's bookmarks, plus the `plan`/`reading` status,
+  storage schema v3/v4, covers, `+N` update badges, and a manual **Refresh updates**.
+  The review fixes are in; a live test is still needed. See
+  [Site bookmark import](#in-flight-site-bookmark-import-v040).
+- **Next:** MangaRead bookmark import. Planned, not built.
+- **Supported sites:** mangaread.org and natomanga.com for saving chapters; natomanga.com
+  for bookmark import (in review).
 - **Surfaces:** Chrome extension.
 
 ## How this roadmap is organized
@@ -72,6 +79,57 @@ surface that can move a position.
 
 ---
 
+## In flight: Site bookmark import (v0.4.0)
+
+**Shared foundation:** each site gets a *bookmark adapter*. The adapter recognizes the
+site, finds its bookmark pages, turns bookmark cards into records, and detects a
+signed-out session. Everything else is shared: a service-worker import job that fetches
+pages inside the user's signed-in tab, and a single storage write that only ever moves
+progress forward. The adapter is the only site-specific part.
+
+- **NatoManga (built, in review).** Jonah's importer: one **Save bookmarks** press walks
+  every `/bookmark?page=N` page, then fills in missing covers and latest chapters from
+  up to 20 series pages. **Refresh updates** reruns it. The plan and the pre-merge
+  review are in
+  [natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md). The
+  review's four blockers and follow-up bugs are fixed, with regression tests. Before
+  merging, it still needs a live test with a signed-in NatoManga account and a real
+  captured fixture page.
+- **MangaRead (next, planned).** MangaRead runs on Madara, a WordPress manga theme that
+  many sites use, so its adapter will be a general Madara adapter configured by host. See
+  [mangaread-bookmark-import-plan.md](./docs/mangaread-bookmark-import-plan.md).
+- **Refactor first.** The branch hard-codes NatoManga in its message types, job key, and
+  popup button. Turn that into the adapter interface before adding the second site, so
+  MangaRead doesn't duplicate it.
+
+**How this changes the bundles below.** Import brings parts of Bundles A and C forward:
+
+- **Bundle A:** The `status` field (`plan` | `reading`) and schema v3 land with the
+  import. The full-page library also becomes more urgent. An import can add thousands of
+  series to a 360px popup that has title-only search and no status or site filter.
+- **Bundle B:** A Madara adapter configured by host is a natural first connector for
+  custom sites. Adding a site built on Madara could bring import along with URL parsing.
+- **Bundle C:** Bookmark pages can list each series' latest chapter all at once. That's
+  cheaper and politer than fetching every series page. Prefer bookmark-page metadata and
+  fall back to per-series fetches. For NatoManga this already landed: covers, latest
+  chapters, per-series `+N` badges, and a manual refresh. Scheduled checks and the
+  toolbar badge remain.
+- **Sync:** Plan-to-read records don't sync yet, because the cloud table requires a
+  chapter. A cloud schema migration is now needed to keep one library across devices.
+- **Progress is sacred:** Reading position only moves forward, so an importer that
+  misreads a page advances series for good. That makes the "Set current chapter"
+  override and a preview before an import writes anything more important.
+
+**Open questions.**
+
+- Should re-importing restore series the user removed from Shiori? Today it does.
+- Should bookmark pages be parsed in the tab with the real DOM, or with the current
+  string parser that has no dependencies?
+- Should imports have a preview/confirm step, as Bundle A plans for browser-bookmark
+  import, or stay one press?
+
+---
+
 ## Bundle A: Management surface (tentative v0.4)
 
 **Shared foundation:** a full-page app and a per-series `status` field. Statuses need a
@@ -90,9 +148,15 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   (`plan` | `reading` | later `completed`/`dropped`). Save a series page as "plan to
   read"; saving a chapter flips it to "reading." Needs series-page detection in the
   parser. Sync rule: `reading` supersedes `plan`; furthest-chapter governs once reading.
+  *Partly landed with site bookmark import:* the `plan`/`reading` field, Plan to read in
+  the popup, "saving a chapter flips it to reading," and the sync rule in `merge.js`.
+  Still to do: saving from a series page, and syncing Plan-to-read records, which needs
+  the cloud migration.
 - **Bulk import of browser bookmarks.** One-click import (the `bookmarks` permission)
   that filters to supported/custom sites, parses each URL, dedupes by furthest chapter,
-  and marks records dirty to sync. Preview/confirm UI lives in the app.
+  and marks records dirty to sync. Preview/confirm UI lives in the app. Covers readers
+  whose bookmarks live in the browser; site bookmark import covers bookmarks kept on the
+  sites. Both should share `bulkUpsert` and the preview.
 
 **Open questions.** Grid vs list density; how much management (bulk ops) in v1; whether
 the app is also the extension's options page; folder scoping for import.
@@ -128,9 +192,13 @@ and the latest chapter, so metadata, live tracking, and custom-site selectors al
 on it.
 
 - **Richer metadata.** Real series titles (replacing slug-derived ones) and cover
-  thumbnails on the cards, for built-in and custom sites.
-- **Live update detection.** A background job (`chrome.alarms`, staggered, polite) checks
-  followed series for the latest chapter. Toolbar badge counts series with updates;
+  thumbnails on the cards, for built-in and custom sites. *Partly landed:* NatoManga
+  bookmark import brings real titles and covers for the series it imports. Covers are
+  remote images, and NatoManga's cover host needs a referrer rule (`declarativeNetRequest`).
+- **Live update detection.** *Partly landed:* NatoManga series get per-series `+N`
+  badges and a manual **Refresh updates**. Still to do: a background job
+  (`chrome.alarms`, staggered, polite) that checks followed series for the latest
+  chapter. Toolbar badge counts series with updates;
   per-series "+N" badges show how far ahead each is; quiet by default, OS notifications
   only as a later per-series opt-in. Per-series and global off switches in Settings.
   Once latest is known, the save area can offer "Go to latest chapter" as a third action
@@ -187,7 +255,10 @@ Done alongside the bundle that first needs them:
 - **Config-driven parser** (Bundle B) - built-in and user patterns share one matcher.
 - **Shared parser / merge / sync module** (Bundle D, helps Bundle E) - one home for the rules.
 - **Settings store** (Bundle A) - a small typed wrapper over `chrome.storage` for preferences.
-- **Series-page reader** (Bundle C) - offscreen-document HTML parsing.
+- **Series-page reader** (Bundle C) - offscreen-document HTML parsing. Pick one parsing
+  approach for this and the bookmark adapters (see the site import open questions).
+- **Site bookmark adapters** (v0.4) - one interface per site for bookmark import:
+  NatoManga first, then MangaRead through a Madara adapter.
 
 ## Sync hardening (ongoing)
 
@@ -199,7 +270,13 @@ daily use.
 - "Resolved N differences" indicator after a conflict.
 - "Set current chapter" override to intentionally move to an earlier chapter. The v0.3.3
   "Go to chapter X" button is the read-only half of this; deliberately moving the saved
-  position backward still means overwriting it from the chapter page.
+  position backward still means overwriting it from the chapter page. Site import raises
+  the stakes: an import that misreads a page can only be undone this way.
+- **Plan to read in the cloud.** Make `chapter` nullable, and add `status` and the
+  metadata columns to the Supabase table, so imported Plan-to-read records and
+  covers/latest chapters sync. The merge rule it depends on, "a real chapter always
+  beats no chapter," is already in `merge.js`. See `docs/cloud-sync-design.md`,
+  "Addendum: schema v3", for the proposed migration.
 
 ## Polish backlog (small, pick up anytime)
 

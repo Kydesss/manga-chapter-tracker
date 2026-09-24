@@ -8,14 +8,38 @@
 //   1. Deletion resolves first, by recency (newer updatedAt wins).
 //   2. Reading position is monotonic: the FURTHEST chapter wins, independent of
 //      which side was written more recently. A stale device can never move you
-//      back.
-//   3. Cosmetic fields (title, seriesUrl) take the more recent value.
+//      back. A record with a chapter always beats one without ("reading
+//      supersedes plan"), so a newer plan-to-read record can't blank out progress.
+//   3. Cosmetic fields (title, seriesUrl) take the more recent value, except that
+//      a real title is never replaced by the slug-derived fallback.
 //   4. createdAt keeps the earliest; updatedAt keeps the max.
+
+import { isSlugTitle } from "./parser.js";
 
 // Parse a chapter label ("83.2", "246") to a number, or null if not parseable.
 export function chapterToNumber(label) {
   const n = parseFloat(label);
   return Number.isNaN(n) ? null : n;
+}
+
+// Plan-to-read records have no chapter. An empty label counts as none too.
+export function hasChapter(label) {
+  return label != null && label !== "";
+}
+
+// Title for a merged record: `preferred`'s, unless it's only the slug-derived
+// fallback and `other` has a real one. Shared with storage.js so saves, imports,
+// and sync all keep a real title once any of them has seen it.
+export function pickTitle(preferred, other) {
+  if (!preferred?.title) return other?.title;
+  if (
+    other?.title &&
+    isSlugTitle(preferred.title, preferred.slug) &&
+    !isSlugTitle(other.title, other.slug)
+  ) {
+    return other.title;
+  }
+  return preferred.title;
 }
 
 // Fields that determine whether two records are "the same" for sync purposes.
@@ -41,6 +65,7 @@ export function resolveConflict(local, remote) {
   const lU = local.updatedAt || "";
   const rU = remote.updatedAt || "";
   const newer = rU > lU ? remote : local; // tie -> local, deterministic
+  const older = newer === local ? remote : local;
   const updatedAt = rU > lU ? rU : lU;
 
   // createdAt: earliest of the two.
@@ -53,12 +78,19 @@ export function resolveConflict(local, remote) {
   // 2. Furthest chapter wins (only meaningful if not deleted).
   let chapterSource = newer;
   if (!deleted) {
-    const ln = chapterToNumber(local.chapter);
-    const rn = chapterToNumber(remote.chapter);
-    if (ln === null || rn === null) {
-      chapterSource = newer; // fall back to recency on bad data
+    const lHas = hasChapter(local.chapter);
+    const rHas = hasChapter(remote.chapter);
+    if (lHas !== rHas) {
+      // Reading supersedes plan, regardless of which side is newer.
+      chapterSource = lHas ? local : remote;
     } else {
-      chapterSource = ln >= rn ? local : remote;
+      const ln = chapterToNumber(local.chapter);
+      const rn = chapterToNumber(remote.chapter);
+      if (ln === null || rn === null) {
+        chapterSource = newer; // both plan, or bad data: fall back to recency
+      } else {
+        chapterSource = ln >= rn ? local : remote;
+      }
     }
   }
 
@@ -66,13 +98,22 @@ export function resolveConflict(local, remote) {
     id: newer.id,
     site: newer.site,
     slug: newer.slug,
-    // 3. Cosmetic fields from the newer record.
-    title: newer.title,
+    // 3. Cosmetic fields from the newer record (a real title beats a slug one).
+    title: pickTitle(newer, older),
     seriesUrl: newer.seriesUrl,
     siteName: newer.siteName,
     // chapter and its URL travel together from whichever side is furthest.
     chapter: chapterSource.chapter,
     chapterUrl: chapterSource.chapterUrl,
+    // Phase 1 metadata remains local-only until the cloud schema is expanded.
+    // Preserve it through sync conflict resolution instead of dropping it.
+    status: chapterSource.status || (chapterSource.chapter == null ? "plan" : "reading"),
+    lastReadAt: chapterSource.lastReadAt ?? null,
+    coverUrl: local.coverUrl ?? remote.coverUrl ?? null,
+    latestChapter: local.latestChapter ?? remote.latestChapter ?? null,
+    latestChapterUrl: local.latestChapterUrl ?? remote.latestChapterUrl ?? null,
+    latestPublishedAt: local.latestPublishedAt ?? remote.latestPublishedAt ?? null,
+    metadataCheckedAt: local.metadataCheckedAt ?? remote.metadataCheckedAt ?? null,
     createdAt,
     updatedAt,
     deleted,

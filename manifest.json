@@ -4,8 +4,27 @@
     "version": "0.3.3",
     "description": "Never lose your place. Shiori tracks the chapter you're on across manga sites, in one library.",
     "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsROM57YBll0vlzgkpOzoovxic8qQKmJUV7NRDGu+r1+tkWwzruL8KzXTz3VmOpBNINhhbqJV+Il2KyGdskDYraK3boznDFKHcC+Q8rr7zk/N0Nvu/z5hHNowbcr8TMQIGvXqf8i+Z3KQbFV/9fS9Y7nQrnpeAkNLf99/AkBdB9VdwhdSzNW0G8yqXlWdOK8Ne2vnWMW24bg1ZMQGipypBGS0vzYpTfFgHMeWBwRnAzyA/BP/nA8uA8303PMJe7Q8PJe/Gl6KxbMcdLPuzKxzVr80vjM7sIaZEHN7UwRfxIrVFieudfHQCGK5wFgwH0I4yS0qXaclmNiNEWmgBrVYswIDAQAB",
-    "permissions": ["storage", "activeTab", "unlimitedStorage", "identity"],
-    "host_permissions": ["https://fohkznuvisjohcuzelca.supabase.co/*"],
+    "permissions": [
+        "storage",
+        "activeTab",
+        "scripting",
+        "unlimitedStorage",
+        "identity",
+        "declarativeNetRequestWithHostAccess"
+    ],
+    "host_permissions": [
+        "https://fohkznuvisjohcuzelca.supabase.co/*",
+        "https://*.2xstorage.com/*"
+    ],
+    "declarative_net_request": {
+        "rule_resources": [
+            {
+                "id": "natomanga_image_referer",
+                "enabled": true,
+                "path": "rules/natomanga-image-referer.json"
+            }
+        ]
+    },
   "background": {
     "service_worker": "background.js",
     "type": "module"

@@ -5,7 +5,8 @@
 // JSON export/import for backup. Loaded as an ES module.
 
 import { parseChapterUrl } from "./parser.js";
-import { getAll, getOne, upsert, remove, importRecords } from "./storage.js";
+import { isNatoMangaUrl } from "./natomanga.js";
+import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
 
@@ -13,6 +14,9 @@ import { syncNow } from "./sync.js";
 const saveInfo = document.getElementById("saveInfo");
 const saveBtn = document.getElementById("saveBtn");
 const goSavedBtn = document.getElementById("goSavedBtn");
+const natoImportBtn = document.getElementById("natoImportBtn");
+const natoRefreshBtn = document.getElementById("natoRefreshBtn");
+const natoImportStatus = document.getElementById("natoImportStatus");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
 const scroller = document.getElementById("scroller");
@@ -28,11 +32,12 @@ const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
 const syncDot = document.getElementById("syncDot");
 
-const ROW_H = 56; // must match --row-h in popup.css
+const ROW_H = 72; // must match the .item height in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
 let pendingTabId = null; // the tab `pending` came from, so we can navigate it
+let activeIsNatoManga = false;
 let allRecords = []; // every saved series (source of truth in memory)
 let filtered = []; // current search/sort view, the array we virtualize
 
@@ -87,10 +92,16 @@ async function refreshSaveArea() {
   const tab = await getActiveTab();
   pendingTabId = tab?.id ?? null;
   pending = tab?.url ? parseChapterUrl(tab.url) : null;
+  const onNatoManga = tab?.url ? isNatoMangaUrl(tab.url) : false;
+  activeIsNatoManga = onNatoManga;
+  natoImportBtn.hidden = !onNatoManga;
+  natoRefreshBtn.hidden = !onNatoManga;
+  if (!onNatoManga) natoImportStatus.hidden = true;
 
   if (!pending) {
-    saveInfo.textContent =
-      "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
+    saveInfo.textContent = onNatoManga
+      ? "NatoManga detected. Save every bookmark using your current NatoManga session."
+      : "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
     saveBtn.disabled = true;
     setGoToSaved(null, null);
     return;
@@ -102,8 +113,11 @@ async function refreshSaveArea() {
   let note = "";
   let savedUrl = null;
   if (existing) {
-    const dir = compareChapters(pending.chapter, existing.chapter);
-    if (dir === 0) {
+    const dir = existing.chapter == null ? NaN : compareChapters(pending.chapter, existing.chapter);
+    if (existing.chapter == null) {
+      note = `<div class="save-note">Already in your library, but not started.</div>`;
+      saveBtn.textContent = "Start reading";
+    } else if (dir === 0) {
       note = `<div class="save-note same">Already saved at chapter ${escapeHtml(
         existing.chapter
       )}.</div>`;
@@ -138,8 +152,10 @@ async function refreshSaveArea() {
     saveBtn.textContent = "Save chapter";
   }
 
+  // Prefer the stored title: an import may know the real one, where the parser
+  // only has the slug.
   saveInfo.innerHTML =
-    `<strong>${escapeHtml(pending.title)}</strong><br>Chapter ${escapeHtml(
+    `<strong>${escapeHtml(existing?.title || pending.title)}</strong><br>Chapter ${escapeHtml(
       pending.chapter
     )} on ${escapeHtml(pending.siteName)}` + note;
   saveBtn.disabled = false;
@@ -150,12 +166,154 @@ async function refreshSaveArea() {
 
 saveBtn.addEventListener("click", async () => {
   if (!pending) return;
-  await upsert({ ...pending, updatedAt: new Date().toISOString() });
-  showToast(`Saved ${pending.title} - ch. ${pending.chapter}`);
+  const saved = await upsert({ ...pending, updatedAt: new Date().toISOString() });
+  showToast(`Saved ${saved.title} - ch. ${saved.chapter}`);
   await load();
   await refreshSaveArea();
   runSync(); // push this save to the cloud if signed in (fire and forget)
 });
+
+// --- NatoManga bookmark import -------------------------------------------
+
+let importPollTimer = null;
+let importRequestPending = false; // this popup started an import and awaits its reply
+let lastJobStatus = null; // to notice a watched import finishing
+
+natoImportBtn.addEventListener("click", () => runNatoOperation("import-natomanga-bookmarks"));
+natoRefreshBtn.addEventListener("click", () => runNatoOperation("refresh-natomanga-updates"));
+
+// Import and Refresh run the same background job: every bookmark page, then a
+// capped series-page pass for missing covers and latest chapters.
+async function runNatoOperation(type) {
+  const tab = await getActiveTab();
+  if (!tab?.id || !tab.url || !isNatoMangaUrl(tab.url)) return;
+
+  const refreshing = type === "refresh-natomanga-updates";
+  importRequestPending = true;
+  showImportJob({
+    status: "running",
+    operation: refreshing ? "refresh" : "import",
+    phase: "bookmarks",
+    pagesCompleted: 0,
+    pagesTotal: 1,
+    bookmarksFound: 0,
+  });
+  let response = null;
+  try {
+    response = await chrome.runtime.sendMessage({ type, tabId: tab.id, pageUrl: tab.url });
+    if (!response?.ok) throw new Error(response?.error || "Bookmark import failed.");
+    if (!response.inProgress) {
+      const result = response.result;
+      showToast(
+        `${refreshing ? "Refreshed" : "Saved"} ` +
+          `${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
+          (result.advanced ? `, advanced ${result.advanced}` : "")
+      );
+    }
+  } catch (err) {
+    showImportJob({ status: "error", error: err?.message || "Bookmark import failed." });
+    showToast(
+      response?.result
+        ? "Import stopped early; earlier pages were saved."
+        : "Import failed: " + (err?.message || "unknown error")
+    );
+  } finally {
+    importRequestPending = false;
+    lastJobStatus = null; // handled here, so the refresh below isn't a new finish
+    // Pages are saved as they arrive, so even a stopped import may have added
+    // series: refresh the list and sync whatever landed.
+    if (!response?.inProgress) {
+      await load();
+      runSync();
+    }
+    refreshImportState();
+  }
+}
+
+// "+N" when the latest known chapter is ahead of the saved one, "NEW" when the
+// labels can't be ranked but differ, nothing otherwise.
+function updateBadge(record) {
+  if (record.chapter == null || record.latestChapter == null) return null;
+  const saved = Number.parseFloat(record.chapter);
+  const latest = Number.parseFloat(record.latestChapter);
+  if (!Number.isNaN(saved) && !Number.isNaN(latest)) {
+    const difference = latest - saved;
+    if (difference <= 0) return null;
+    return `+${Number.isInteger(difference) ? difference : difference.toFixed(1)}`;
+  }
+  return record.chapter === record.latestChapter ? null : "NEW";
+}
+
+async function refreshImportState() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "get-natomanga-import-state" });
+    if (!response?.ok || !response.job) return;
+    // Until this popup's own request is answered, the stored job may still be
+    // the previous run's. Keep showing progress rather than that old result.
+    if (importRequestPending && response.job.status !== "running") {
+      clearTimeout(importPollTimer);
+      importPollTimer = setTimeout(refreshImportState, 500);
+      return;
+    }
+    showImportJob(response.job);
+  } catch {
+    // The service worker may be starting; the next popup open retries.
+  }
+}
+
+function showImportJob(job) {
+  clearTimeout(importPollTimer);
+  const running = job?.status === "running";
+  // An import this popup watched, but didn't start, just finished. Its pages
+  // are already saved, so bring them into the list and sync them.
+  if (lastJobStatus === "running" && !running && !importRequestPending) {
+    load();
+    runSync();
+  }
+  lastJobStatus = job?.status ?? null;
+  const refreshing = job?.operation === "refresh";
+  natoImportBtn.disabled = running;
+  natoRefreshBtn.disabled = running;
+  natoImportBtn.textContent = running && !refreshing ? "Saving bookmarks..." : "Save bookmarks";
+  natoRefreshBtn.textContent = running && refreshing ? "Refreshing updates..." : "Refresh updates";
+
+  if (!job || !activeIsNatoManga) {
+    natoImportStatus.hidden = true;
+    return;
+  }
+
+  natoImportStatus.hidden = false;
+  if (running) {
+    if (job.phase === "metadata") {
+      natoImportStatus.textContent =
+        `Checking series details ${Math.min(
+          (job.seriesPagesCompleted || 0) + 1,
+          job.seriesPagesTotal || 1
+        )} of ${job.seriesPagesTotal || 1}`;
+    } else {
+      natoImportStatus.textContent =
+        `Scanning bookmarks page ${Math.min(
+          (job.pagesCompleted || 0) + 1,
+          job.pagesTotal || 1
+        )} of ${job.pagesTotal || 1} · ${job.bookmarksFound || 0} found`;
+    }
+    importPollTimer = setTimeout(refreshImportState, 500);
+  } else if (job.status === "complete") {
+    const result = job.result || {};
+    if (!result.bookmarksFound) {
+      natoImportStatus.textContent =
+        "No bookmarks found. Check that this NatoManga account has bookmarks.";
+    } else {
+      natoImportStatus.textContent =
+        `${result.bookmarksFound} found · ${result.added || 0} new` +
+        (result.advanced ? ` · ${result.advanced} advanced` : "") +
+        (result.seriesPagesChecked ? ` · ${result.seriesPagesChecked} details checked` : "") +
+        (result.failedPages?.length ? ` · ${result.failedPages.length} page failed` : "");
+    }
+  } else if (job.status === "error") {
+    natoImportStatus.textContent = job.error || "Bookmark import failed.";
+  }
+}
 
 // Jump to the saved chapter. Deliberately does NOT save: it's the way out of a
 // mismatch that leaves your position untouched.
@@ -175,6 +333,8 @@ goSavedBtn.addEventListener("click", async () => {
 // --- Data load + view computation -----------------------------------------
 
 async function load() {
+  // Migrations must also run for local-only users; sync may never be invoked.
+  await migrate();
   allRecords = await getAll();
   computeView();
 }
@@ -188,7 +348,14 @@ function computeView() {
   if (sortSelect.value === "title") {
     filtered.sort((a, b) => a.title.localeCompare(b.title));
   } else {
-    filtered.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+    // Recently read first. Series with no known read time (plan to read, or
+    // imported without one) follow alphabetically, instead of an import's
+    // timestamp pushing them all to the top.
+    filtered.sort(
+      (a, b) =>
+        (b.lastReadAt || "").localeCompare(a.lastReadAt || "") ||
+        a.title.localeCompare(b.title)
+    );
   }
 
   // Header count + empty/no-results messaging.
@@ -234,14 +401,21 @@ scroller.addEventListener("scroll", () => {
 });
 
 function renderItem(r) {
+  const badgeLabel = updateBadge(r);
   const row = document.createElement("div");
   row.className = "item";
   row.setAttribute("role", "listitem");
   row.tabIndex = 0; // keyboard focusable
-  row.setAttribute("aria-label", `${r.title}, chapter ${r.chapter}, ${r.siteName}`);
+  row.setAttribute(
+    "aria-label",
+    (r.chapter == null
+      ? `${r.title}, plan to read, ${r.siteName}`
+      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`) +
+      (badgeLabel ? `, latest chapter ${r.latestChapter}` : "")
+  );
 
   const open = () => {
-    const url = safeUrl(r.chapterUrl);
+    const url = safeUrl(r.chapterUrl) || safeUrl(r.seriesUrl);
     if (!url) {
       showToast("That series has no usable saved link.");
       return;
@@ -256,27 +430,54 @@ function renderItem(r) {
     }
   });
 
+  // Cover thumbnail, lazy-loaded, with the Shiori mark when missing or broken.
+  const cover = document.createElement("img");
+  cover.className = "item-cover";
+  cover.alt = "";
+  cover.loading = "lazy";
+  cover.src = safeUrl(r.coverUrl) || chrome.runtime.getURL("icons/logo.svg");
+  cover.addEventListener("error", () => {
+    const fallback = chrome.runtime.getURL("icons/logo.svg");
+    if (cover.src !== fallback) cover.src = fallback;
+  });
+
   const main = document.createElement("div");
   main.className = "item-main";
 
-  // Primary: title.
+  // Primary: title, with an update badge when newer chapters are out.
   const title = document.createElement("div");
   title.className = "item-title";
   title.textContent = r.title;
+  const titleLine = document.createElement("div");
+  titleLine.className = "item-title-line";
+  titleLine.appendChild(title);
+  if (badgeLabel) {
+    const badge = document.createElement("span");
+    badge.className = "update-badge";
+    badge.textContent = badgeLabel;
+    badge.title = `Latest chapter: ${r.latestChapter}`;
+    titleLine.appendChild(badge);
+  }
 
-  // Secondary: chapter (emphasized), then site and last-read (tertiary, muted).
+  // Secondary: chapter (emphasized), then site, last-read, and the latest
+  // chapter when known (tertiary, muted).
   const meta = document.createElement("div");
   meta.className = "item-sub";
   const chap = document.createElement("span");
   chap.className = "item-chapter";
-  chap.textContent = "Chapter " + r.chapter;
+  chap.textContent = r.chapter == null ? "Plan to read" : "Chapter " + r.chapter;
   const rest = document.createElement("span");
   rest.className = "item-meta";
-  const when = relativeTime(r.updatedAt);
-  rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
+  const when = relativeTime(r.lastReadAt); // unknown for plan-to-read and imports
+  const latestWhen = relativeTime(r.latestPublishedAt);
+  rest.textContent =
+    (when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`) +
+    (r.latestChapter
+      ? ` · Latest ${r.latestChapter}${latestWhen ? ` (${latestWhen})` : ""}`
+      : "");
   meta.append(chap, rest);
 
-  main.append(title, meta);
+  main.append(titleLine, meta);
 
   const del = document.createElement("button");
   del.className = "delete-btn";
@@ -291,7 +492,7 @@ function renderItem(r) {
     runSync(); // push the tombstone so the deletion propagates
   });
 
-  row.append(main, del);
+  row.append(cover, main, del);
   return row;
 }
 
@@ -469,8 +670,13 @@ async function runSync(opts = {}) {
 searchInput.addEventListener("input", debounce(computeView, 150));
 sortSelect.addEventListener("change", computeView);
 
-// Initial paint, then a throttled sync on open (no-op when signed out).
-refreshSaveArea();
-refreshAuthUI();
-load();
-runSync({ throttle: true });
+// Migrate before any reads or sync work so local-only and signed-in startup
+// paths cannot race while rewriting the stored map.
+async function initialize() {
+  await migrate();
+  await refreshSaveArea();
+  await Promise.all([refreshAuthUI(), refreshImportState(), load()]);
+  runSync({ throttle: true });
+}
+
+initialize();

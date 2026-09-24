@@ -113,3 +113,92 @@ test("when cloud already matches, nothing is marked dirty or changed", () => {
   const { changedIds } = mergeRemoteIntoLocal(local, [r]);
   assert.equal(changedIds.length, 0);
 });
+
+test("local-only metadata survives a cloud conflict", () => {
+  const local = rec({
+    chapter: "12",
+    coverUrl: "https://img.example/cover.jpg",
+    latestChapter: "15",
+    metadataCheckedAt: "2026-06-01T00:00:00Z",
+  });
+  const remote = rec({ chapter: "13", updatedAt: "2026-07-01T00:00:00Z" });
+  const merged = resolveConflict(local, remote);
+  assert.equal(merged.chapter, "13");
+  assert.equal(merged.coverUrl, "https://img.example/cover.jpg");
+  assert.equal(merged.latestChapter, "15");
+  assert.equal(merged.metadataCheckedAt, "2026-06-01T00:00:00Z");
+});
+
+test("a chapter always beats a newer plan-to-read record (reading supersedes plan)", () => {
+  const plan = rec({
+    chapter: null,
+    chapterUrl: null,
+    status: "plan",
+    updatedAt: "2026-09-22T12:00:00Z",
+  });
+  const reading = rec({
+    chapter: "50",
+    chapterUrl: "u50",
+    status: "reading",
+    updatedAt: "2026-08-01T00:00:00Z",
+  });
+  for (const [local, remote] of [
+    [plan, reading],
+    [reading, plan],
+  ]) {
+    const m = resolveConflict(local, remote);
+    assert.equal(m.chapter, "50");
+    assert.equal(m.chapterUrl, "u50");
+    assert.equal(m.status, "reading");
+    assert.equal(m.updatedAt, "2026-09-22T12:00:00Z");
+  }
+});
+
+test("a pull never turns a newer local plan record's cloud chapter into plan", () => {
+  // Import made this device's copy "plan to read" after another device read on.
+  const local = {
+    "natomanga.com:foo": {
+      ...rec({ chapter: null, chapterUrl: null, status: "plan", updatedAt: "2026-09-22T12:00:00Z" }),
+      dirty: true,
+    },
+  };
+  const remote = rec({ chapter: "50", chapterUrl: "u50", updatedAt: "2026-08-01T00:00:00Z" });
+  const { next } = mergeRemoteIntoLocal(local, [remote]);
+  assert.equal(next["natomanga.com:foo"].chapter, "50");
+  assert.equal(next["natomanga.com:foo"].status, "reading");
+  assert.equal(next["natomanga.com:foo"].dirty, true); // newer updatedAt goes back up
+});
+
+test("two plan-to-read records still resolve by recency", () => {
+  const older = rec({ chapter: null, chapterUrl: null, title: "Old", updatedAt: "2026-08-01T00:00:00Z" });
+  const newer = rec({ chapter: null, chapterUrl: null, title: "New", updatedAt: "2026-09-01T00:00:00Z" });
+  const m = resolveConflict(older, newer);
+  assert.equal(m.chapter, null);
+  assert.equal(m.status, "plan");
+  assert.equal(m.title, "New");
+});
+
+test("a real title beats the slug-derived fallback, whichever side is newer", () => {
+  const imported = rec({
+    slug: "witch-and-mercenary",
+    title: "Witch & Mercenary",
+    updatedAt: "2026-09-01T00:00:00Z",
+  });
+  const savedFromUrl = rec({
+    slug: "witch-and-mercenary",
+    title: "Witch And Mercenary", // what parser.js derives from the slug
+    chapter: "11",
+    chapterUrl: "u11",
+    updatedAt: "2026-09-20T00:00:00Z",
+  });
+  assert.equal(resolveConflict(imported, savedFromUrl).title, "Witch & Mercenary");
+  assert.equal(resolveConflict(savedFromUrl, imported).title, "Witch & Mercenary");
+
+  // Between two real titles, the newer one still wins.
+  const renamed = rec({
+    slug: "witch-and-mercenary",
+    title: "Witch and Mercenary (Official)",
+    updatedAt: "2026-09-21T00:00:00Z",
+  });
+  assert.equal(resolveConflict(imported, renamed).title, "Witch and Mercenary (Official)");
+});

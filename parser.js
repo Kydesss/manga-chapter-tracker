@@ -25,12 +25,18 @@ function matchSite(hostname) {
 
 // Turn a slug like "blue-lock" into a readable "Blue Lock".
 // This is the simple fallback title source for v1 (no content script needed).
-function prettifyTitle(slug) {
+export function prettifyTitle(slug) {
   return slug
     .split("-")
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+// True when `title` is only the slug-derived fallback above. A real title (from
+// a bookmark import, or later the page itself) should never be replaced by it.
+export function isSlugTitle(title, slug) {
+  return typeof slug === "string" && title === prettifyTitle(slug);
 }
 
 // Chapter "83-2" should display as "83.2".
@@ -56,6 +62,7 @@ export function parseChapterUrl(rawUrl) {
 
   const slug = match[1];
   const chapterRaw = match[2];
+  const timestamp = new Date().toISOString();
 
   return {
     id: `${site.id}:${slug}`, // stable key => "save" is an upsert, never a dupe
@@ -66,7 +73,14 @@ export function parseChapterUrl(rawUrl) {
     chapter: chapterLabel(chapterRaw),
     chapterUrl: url.href,
     seriesUrl: `${url.origin}/manga/${slug}`,
-    updatedAt: new Date().toISOString(),
+    status: "reading",
+    lastReadAt: timestamp,
+    coverUrl: null,
+    latestChapter: null,
+    latestChapterUrl: null,
+    latestPublishedAt: null,
+    metadataCheckedAt: null,
+    updatedAt: timestamp,
   };
 }
 

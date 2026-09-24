@@ -265,3 +265,79 @@ Ordered so the two riskiest, plan-invalidating pieces come first.
 - **Test the sync lock** coalesces concurrent passes (no double push).
 - **Test batching** with a synthetic library of several thousand records.
 - **Manual two-profile test** in Chrome: sign into the same account in two profiles; confirm saves, edits, and deletions converge after a sync on each side.
+
+## Addendum: schema v3 and Plan to read (v0.4)
+
+Site bookmark import (`docs/natomanga-bookmark-import-plan.md`) extends the local record.
+It's recorded here because it changes what sync has to handle.
+
+**New local fields.**
+
+- `status`: `"plan"` or `"reading"`.
+- `lastReadAt`: when the reading position last changed, which is separate from
+  `updatedAt`. Imports leave it `null`, because a site doesn't say when you read.
+- Metadata for covers and update tracking: `coverUrl`, `latestChapter`,
+  `latestChapterUrl`, `latestPublishedAt`, `metadataCheckedAt`.
+
+Moving `schemaVersion` to 3 fills these in on existing records. Version 4 then sets
+`lastReadAt` from `updatedAt` on records saved before `lastReadAt` existed. A
+Plan-to-read record has `chapter: null` and `chapterUrl: null`.
+
+**What syncs today: nothing new.** The table above still requires `chapter` and
+`chapter_url`, so:
+
+- Every push leaves out Plan-to-read records. They stay `dirty` locally and don't reach
+  other devices.
+- The metadata fields survive conflict resolution (the local value is preferred) but are
+  never uploaded. `fromRow` sets them to `null` and sets `lastReadAt` to `updated_at`.
+- A change to metadata alone, such as a new cover or latest chapter from
+  **Refresh updates**, doesn't bump `updatedAt` or set `dirty`. Refreshing a large
+  library therefore doesn't cause a wave of pushes.
+
+**Conflict rule extension (required).** The rule "if a label cannot be parsed, fall back
+to `updatedAt`" was meant for bad data. It must not apply to a *missing* chapter.
+Otherwise a newer Plan-to-read record beats an older record that has a chapter, and
+progress gets blanked out, which is exactly what the rule was supposed to prevent. The
+fix is that **a real chapter always beats no chapter** (the roadmap's "reading
+supersedes plan"). Once both sides have a chapter, the furthest one wins as before.
+This is implemented in `merge.js` (v0.4), along with two related changes:
+
+- Title is still a cosmetic field that the newer record wins, with one exception: a
+  real title is never replaced by the slug-derived fallback (`pickTitle`).
+- JSON Import (Export/Import backups) now resolves conflicts with the same
+  `resolveConflict`, so restoring a backup follows the rules in this document.
+
+**Concurrency (v0.4).** Both the popup and the service worker write the library now.
+Every read-modify-write in `storage.js` runs under one Web Lock, and the sync pass
+merges through a locked `updateMap` instead of reading and writing in separate steps.
+This refines Invariant 3: `markSynced` clears `dirty` only on records whose `updatedAt`
+hasn't changed since they were pushed. A record saved again during an upload stays
+dirty and goes up on the next pass.
+
+**Proposed table migration (not applied).** Apply this once Plan-to-read records should
+sync:
+
+```sql
+alter table public.series
+  alter column chapter drop not null,
+  alter column chapter_url drop not null,
+  add column status text not null default 'reading',
+  add column last_read_at timestamptz,
+  add column cover_url text,
+  add column latest_chapter text,
+  add column latest_chapter_url text,
+  add column latest_published_at timestamptz,
+  add column metadata_checked_at timestamptz;
+```
+
+Rollout notes:
+
+- Upserts with `merge-duplicates` only write the columns they send, so an older client
+  won't erase the new columns.
+- An older client does misread rows with no chapter: it shows them as "Chapter null",
+  and its merge applies the recency fallback. Update every install before any client
+  pushes a Plan-to-read record.
+- Metadata needs field-level merge rules before it syncs:
+  - `latestChapter`: the furthest one wins.
+  - `metadataCheckedAt`: the newest one wins, along with the metadata fields from that
+    same check.

@@ -295,6 +295,54 @@ to keep the product coherent as it grows.
 
 ---
 
+## 15. Jonah's autoscraper, and taking it to MangaRead
+
+Jonah, the reader with 3-4k bookmarks, built the feature that reader needed most, on the
+`autoscraper` branch. A **Save bookmarks** button imports every NatoManga bookmark in
+one press, using the NatoManga session already open in the browser. It came with its own
+phased plan (`docs/natomanga-bookmark-import-plan.md`), a "plan to read" status for
+series that are bookmarked but not started, and a bulk write that never moves a series
+backward.
+
+Before merging, Joaquin asked for a review of the branch and of how it changes the
+roadmap, and then made the next call:
+
+> "I would like to implement a similar thing but for mangaread. Don't try building the
+> autoscraper for mangaread yet. First let's update the docs and changelog and other
+> things."
+
+The review found the importer well built: a pure, fixture-tested parser, forward-only
+writes, and no credentials touched. The trouble was in the new "no chapter yet" state
+reaching older code that assumed every record has a chapter. A sync could turn a
+series the cloud had at a real chapter back into "plan to read" on the device, a manual
+save reset imported titles, and a JSON backup round trip dropped plan-to-read records. None of this showed up in Jonah's
+testing, because Jonah uses Shiori local-only and the sync path never ran. It's the same
+lesson as the live sync testing in section 10: the risk sits where a new feature meets an
+old one.
+
+The review also found that MangaRead runs on Madara, a WordPress theme shared by many
+manga sites. That turned "a second scraper" into a design question: build the MangaRead
+importer as a reusable Madara adapter, which also gives Bundle B (custom sites) a head
+start.
+
+Joaquin then chose to fix everything before merging instead of shipping with known
+issues:
+
+> "Let's fix the four blockers and the other bugs, add tests then commit."
+
+Every fix got a regression test, and the suite grew from 29 to 51 tests. The new tests
+fail on the branch as it was, which shows they would have caught the problems. Two
+product questions were left open on purpose, because they're decisions rather than
+bugs: whether a re-import should bring back a series removed in Shiori, and when
+Plan-to-read records should start syncing.
+
+**Why it mattered.** This is the two-person workflow working as intended: one
+collaborator builds on a branch and the other reviews before merging. The planning
+discipline from the sync work (section 6), documenting first and building second, gets
+applied again.
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."
@@ -302,3 +350,5 @@ to keep the product coherent as it grows.
 - Joaquin personally surfacing the two hardest risks (empty-cloud data loss; old-vs-new conflict) and the principled rules that resolved them.
 - Restraint as a feature.
 - Local-first as a respect-for-the-user stance.
+- Review before merge: a new state ("no chapter yet") meeting old code paths, and why a
+  tester who only uses local mode can't catch sync bugs.

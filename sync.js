@@ -13,9 +13,8 @@ import { SITES } from "./parser.js";
 import { mergeRemoteIntoLocal } from "./merge.js";
 import {
   migrate,
-  getMap,
   getAllRaw,
-  writeAll,
+  updateMap,
   markSynced,
   getCursor,
   setCursor,
@@ -63,10 +62,25 @@ function fromRow(row) {
     chapterUrl: row.chapter_url,
     seriesUrl: row.series_url,
     siteName: SITE_NAME[row.site] || row.site,
+    status: row.chapter == null ? "plan" : "reading",
+    // Before the dedicated cloud column exists, updated_at is the best
+    // available approximation for when this synced chapter was saved.
+    lastReadAt: row.chapter == null ? null : row.updated_at,
+    coverUrl: null,
+    latestChapter: null,
+    latestChapterUrl: null,
+    latestPublishedAt: null,
+    metadataCheckedAt: null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deleted: !!row.deleted,
   };
+}
+
+// The current Supabase schema requires a chapter and chapter URL. Plan-to-read
+// records remain local and dirty until the later nullable-column migration.
+function isCloudCompatible(rec) {
+  return typeof rec.chapter === "string" && typeof rec.chapterUrl === "string";
 }
 
 // --- Authenticated fetch (refreshes the token once on 401) ----------------
@@ -156,16 +170,20 @@ export async function syncNow({ throttle = false } = {}) {
     const remoteRecords = rows.map(fromRow);
 
     // 2. MERGE into local (never deletes on absence; sets dirty where we differ).
-    const localMap = await getMap();
-    const { next } = mergeRemoteIntoLocal(localMap, remoteRecords);
-    await writeAll(next);
+    //    One locked read-merge-write, so a save or import page can't be lost.
+    const next = await updateMap(
+      (localMap) => mergeRemoteIntoLocal(localMap, remoteRecords).next
+    );
 
     // 3. PUSH. On the very first sync, push everything so an empty (or partial)
     //    cloud receives the full local library. Afterwards, push only dirty.
     const all = Object.values(next);
-    const pushRecords = firstTime ? all : all.filter((r) => r.dirty);
+    const pushRecords = (firstTime ? all : all.filter((r) => r.dirty)).filter(
+      isCloudCompatible
+    );
     const pushedIds = await push(pushRecords, userId);
-    await markSynced(pushedIds);
+    // Records edited while the push was in flight stay dirty for the next pass.
+    await markSynced(pushRecords);
 
     // 4. Advance the cursor using server timestamps (avoids clock-skew gaps).
     const newCursor = maxTimestamp([
