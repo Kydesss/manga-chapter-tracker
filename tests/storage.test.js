@@ -247,3 +247,51 @@ test("bulk import advances an existing series to the latest viewed chapter", asy
     "2026-09-22T12:00:00.000Z"
   );
 });
+
+test("metadata refresh stores covers and updates without creating a cloud-dirty change", async () => {
+  data.schemaVersion = 3;
+  data.series = {
+    "natomanga.com:metadata": {
+      id: "natomanga.com:metadata",
+      site: "natomanga.com",
+      siteName: "NatoManga",
+      slug: "metadata",
+      title: "Metadata",
+      seriesUrl: "https://www.natomanga.com/manga/metadata",
+      status: "reading",
+      chapter: "8",
+      chapterUrl: "https://www.natomanga.com/manga/metadata/chapter-8",
+      lastReadAt: "2026-08-01T00:00:00.000Z",
+      coverUrl: null,
+      latestChapter: null,
+      latestChapterUrl: null,
+      latestPublishedAt: null,
+      metadataCheckedAt: null,
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      deleted: false,
+      dirty: false,
+    },
+  };
+
+  const result = await bulkUpsert(
+    [
+      {
+        ...data.series["natomanga.com:metadata"],
+        coverUrl: "https://cdn.example/metadata.jpg",
+        latestChapter: "10",
+        latestChapterUrl: "https://www.natomanga.com/manga/metadata/chapter-10",
+        latestPublishedAt: "2026-09-22T10:00:00.000Z",
+        metadataCheckedAt: "2026-09-23T12:00:00.000Z",
+      },
+    ],
+    { timestamp: "2026-09-23T12:00:00.000Z" }
+  );
+
+  const stored = data.series["natomanga.com:metadata"];
+  assert.equal(result.enriched, 1);
+  assert.equal(stored.coverUrl, "https://cdn.example/metadata.jpg");
+  assert.equal(stored.latestChapter, "10");
+  assert.equal(stored.dirty, false);
+  assert.equal(stored.updatedAt, "2026-08-01T00:00:00.000Z");
+});

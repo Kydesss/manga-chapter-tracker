@@ -15,6 +15,7 @@ const saveInfo = document.getElementById("saveInfo");
 const saveBtn = document.getElementById("saveBtn");
 const goSavedBtn = document.getElementById("goSavedBtn");
 const natoImportBtn = document.getElementById("natoImportBtn");
+const natoRefreshBtn = document.getElementById("natoRefreshBtn");
 const natoImportStatus = document.getElementById("natoImportStatus");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
@@ -31,7 +32,7 @@ const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
 const syncDot = document.getElementById("syncDot");
 
-const ROW_H = 56; // must match --row-h in popup.css
+const ROW_H = 72; // must match the .item height in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
@@ -94,6 +95,7 @@ async function refreshSaveArea() {
   const onNatoManga = tab?.url ? isNatoMangaUrl(tab.url) : false;
   activeIsNatoManga = onNatoManga;
   natoImportBtn.hidden = !onNatoManga;
+  natoRefreshBtn.hidden = !onNatoManga;
   if (!onNatoManga) natoImportStatus.hidden = true;
 
   if (!pending) {
@@ -173,14 +175,24 @@ saveBtn.addEventListener("click", async () => {
 
 let importPollTimer = null;
 
-natoImportBtn.addEventListener("click", async () => {
+natoImportBtn.addEventListener("click", () => runNatoOperation("import-natomanga-bookmarks"));
+natoRefreshBtn.addEventListener("click", () => runNatoOperation("refresh-natomanga-updates"));
+
+async function runNatoOperation(type) {
   const tab = await getActiveTab();
   if (!tab?.id || !tab.url || !isNatoMangaUrl(tab.url)) return;
 
-  showImportJob({ status: "running", pagesCompleted: 0, pagesTotal: 1, bookmarksFound: 0 });
+  showImportJob({
+    status: "running",
+    operation: type === "refresh-natomanga-updates" ? "refresh" : "import",
+    phase: "bookmarks",
+    pagesCompleted: 0,
+    pagesTotal: 1,
+    bookmarksFound: 0,
+  });
   try {
     const response = await chrome.runtime.sendMessage({
-      type: "import-natomanga-bookmarks",
+      type,
       tabId: tab.id,
       pageUrl: tab.url,
     });
@@ -189,7 +201,8 @@ natoImportBtn.addEventListener("click", async () => {
       await load();
       const result = response.result;
       showToast(
-        `Saved ${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
+        `${type === "refresh-natomanga-updates" ? "Refreshed" : "Saved"} ` +
+          `${result.added} new bookmark${result.added === 1 ? "" : "s"}` +
           (result.advanced ? `, advanced ${result.advanced}` : "")
       );
       runSync();
@@ -200,7 +213,19 @@ natoImportBtn.addEventListener("click", async () => {
   } finally {
     refreshImportState();
   }
-});
+}
+
+function updateBadge(record) {
+  if (record.chapter == null || record.latestChapter == null) return null;
+  const saved = Number.parseFloat(record.chapter);
+  const latest = Number.parseFloat(record.latestChapter);
+  if (!Number.isNaN(saved) && !Number.isNaN(latest)) {
+    const difference = latest - saved;
+    if (difference <= 0) return null;
+    return `+${Number.isInteger(difference) ? difference : difference.toFixed(1)}`;
+  }
+  return record.chapter === record.latestChapter ? null : "NEW";
+}
 
 async function refreshImportState() {
   try {
@@ -215,7 +240,11 @@ function showImportJob(job) {
   clearTimeout(importPollTimer);
   const running = job?.status === "running";
   natoImportBtn.disabled = running;
-  natoImportBtn.textContent = running ? "Saving bookmarks..." : "Save bookmarks";
+  natoRefreshBtn.disabled = running;
+  natoImportBtn.textContent =
+    running && job.operation === "import" ? "Saving bookmarks..." : "Save bookmarks";
+  natoRefreshBtn.textContent =
+    running && job.operation === "refresh" ? "Refreshing updates..." : "Refresh updates";
 
   if (!job || !activeIsNatoManga) {
     natoImportStatus.hidden = true;
@@ -224,9 +253,19 @@ function showImportJob(job) {
 
   natoImportStatus.hidden = false;
   if (running) {
-    natoImportStatus.textContent =
-      `Importing page ${Math.min((job.pagesCompleted || 0) + 1, job.pagesTotal || 1)}` +
-      ` of ${job.pagesTotal || 1} · ${job.bookmarksFound || 0} found`;
+    if (job.phase === "metadata") {
+      natoImportStatus.textContent =
+        `Checking series details ${Math.min(
+          (job.seriesPagesCompleted || 0) + 1,
+          job.seriesPagesTotal || 1
+        )} of ${job.seriesPagesTotal || 1}`;
+    } else {
+      natoImportStatus.textContent =
+        `Scanning bookmarks page ${Math.min(
+          (job.pagesCompleted || 0) + 1,
+          job.pagesTotal || 1
+        )} of ${job.pagesTotal || 1} · ${job.bookmarksFound || 0} found`;
+    }
     importPollTimer = setTimeout(refreshImportState, 500);
   } else if (job.status === "complete") {
     const result = job.result || {};
@@ -237,6 +276,7 @@ function showImportJob(job) {
       natoImportStatus.textContent =
         `${result.bookmarksFound} found · ${result.added || 0} new` +
         (result.advanced ? ` · ${result.advanced} advanced` : "") +
+        (result.seriesPagesChecked ? ` · ${result.seriesPagesChecked} details checked` : "") +
         (result.failedPages?.length ? ` · ${result.failedPages.length} page failed` : "");
     }
   } else if (job.status === "error") {
@@ -323,15 +363,17 @@ scroller.addEventListener("scroll", () => {
 });
 
 function renderItem(r) {
+  const badgeLabel = updateBadge(r);
   const row = document.createElement("div");
   row.className = "item";
   row.setAttribute("role", "listitem");
   row.tabIndex = 0; // keyboard focusable
   row.setAttribute(
     "aria-label",
-    r.chapter == null
+    (r.chapter == null
       ? `${r.title}, plan to read, ${r.siteName}`
-      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`
+      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`) +
+      (badgeLabel ? `, latest chapter ${r.latestChapter}` : "")
   );
 
   const open = () => {
@@ -350,6 +392,16 @@ function renderItem(r) {
     }
   });
 
+  const cover = document.createElement("img");
+  cover.className = "item-cover";
+  cover.alt = "";
+  cover.loading = "lazy";
+  cover.src = safeUrl(r.coverUrl) || chrome.runtime.getURL("icons/logo.svg");
+  cover.addEventListener("error", () => {
+    const fallback = chrome.runtime.getURL("icons/logo.svg");
+    if (cover.src !== fallback) cover.src = fallback;
+  });
+
   const main = document.createElement("div");
   main.className = "item-main";
 
@@ -357,6 +409,16 @@ function renderItem(r) {
   const title = document.createElement("div");
   title.className = "item-title";
   title.textContent = r.title;
+  const titleLine = document.createElement("div");
+  titleLine.className = "item-title-line";
+  titleLine.appendChild(title);
+  if (badgeLabel) {
+    const badge = document.createElement("span");
+    badge.className = "update-badge";
+    badge.textContent = badgeLabel;
+    badge.title = `Latest chapter: ${r.latestChapter}`;
+    titleLine.appendChild(badge);
+  }
 
   // Secondary: chapter (emphasized), then site and last-read (tertiary, muted).
   const meta = document.createElement("div");
@@ -367,10 +429,15 @@ function renderItem(r) {
   const rest = document.createElement("span");
   rest.className = "item-meta";
   const when = relativeTime(r.lastReadAt || (r.chapter == null ? null : r.updatedAt));
-  rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
+  const latestWhen = relativeTime(r.latestPublishedAt);
+  rest.textContent =
+    (when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`) +
+    (r.latestChapter
+      ? ` · Latest ${r.latestChapter}${latestWhen ? ` (${latestWhen})` : ""}`
+      : "");
   meta.append(chap, rest);
 
-  main.append(title, meta);
+  main.append(titleLine, meta);
 
   const del = document.createElement("button");
   del.className = "delete-btn";
@@ -385,7 +452,7 @@ function renderItem(r) {
     runSync(); // push the tombstone so the deletion propagates
   });
 
-  row.append(main, del);
+  row.append(cover, main, del);
   return row;
 }
 

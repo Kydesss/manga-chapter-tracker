@@ -39,13 +39,19 @@ test("background import fetches every page and stores each last-viewed chapter",
       async executeScript({ args }) {
         const url = new URL(args[0]);
         const pageNumber = url.searchParams.get("page");
+        const isSeriesPage = url.pathname.startsWith("/manga/");
+        const slug = url.pathname.split("/").filter(Boolean)[1];
         return [
           {
             result: {
               ok: true,
               status: 200,
               url: url.href,
-              html: pages[pageNumber],
+              html: isSeriesPage
+                ? `<div class="manga-info-pic"><img src="/covers/${slug}.jpg"></div>
+                   <div class="manga-info-text"><h1>${slug}</h1></div>
+                   <div class="chapter-list"><a href="/manga/${slug}/chapter-99">Chapter 99</a> 1 day ago</div>`
+                : pages[pageNumber],
             },
           },
         ];
@@ -87,7 +93,10 @@ test("background import fetches every page and stores each last-viewed chapter",
   assert.equal(response.result.pagesCompleted, 2);
   assert.equal(response.result.bookmarksFound, 2);
   assert.equal(response.result.added, 2);
+  assert.equal(response.result.seriesPagesChecked, 2);
   assert.equal(data.series["natomanga.com:first-series"].chapter, "3");
   assert.equal(data.series["natomanga.com:second-series"].chapter, "7.5");
+  assert.match(data.series["natomanga.com:first-series"].coverUrl, /first-series\.jpg$/);
+  assert.equal(data.series["natomanga.com:first-series"].latestChapter, "99");
   assert.equal(data.natomangaImportJob.status, "complete");
 });

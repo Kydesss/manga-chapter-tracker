@@ -239,6 +239,11 @@ Do not call the current single-record `upsert()` thousands of times because it r
 
 ## Phase 4: Manga thumbnails
 
+**Implementation status:** Implemented on 2026-09-23, pending live NatoManga
+markup validation. Bookmark-card covers are captured when present, missing
+covers use a capped series-page fallback (20 per run), and the popup renders
+lazy-loaded thumbnails with a Shiori fallback image.
+
 ### 4.1 Capture covers during bookmark import
 
 Inspect each bookmark card for its existing thumbnail before fetching individual manga pages.
@@ -263,6 +268,13 @@ Inspect each bookmark card for its existing thumbnail before fetching individual
 - Loading a large library does not request every cover at once.
 
 ## Phase 5: Latest chapters, updates, and dates
+
+**Implementation status:** Manual update tracking implemented on 2026-09-23,
+pending live validation. Bookmark pages now provide latest-chapter metadata and
+dates where available, a capped series-page fallback fills gaps, the popup shows
+update badges, and **Refresh updates** reruns the metadata pass. Scheduled
+`chrome.alarms` checks remain intentionally deferred until the manual parser is
+confirmed against the authenticated site.
 
 ### 5.1 Prefer bulk metadata from bookmark pages
 

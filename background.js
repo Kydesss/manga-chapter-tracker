@@ -10,12 +10,17 @@
 // respond. The popup just sends a message and reads the result.
 
 import { signInWithGoogle, signOut } from "./auth.js";
-import { parseNatoBookmarkPage, isNatoMangaUrl } from "./natomanga.js";
-import { bulkUpsert, migrate } from "./storage.js";
+import {
+  parseNatoBookmarkPage,
+  parseNatoSeriesPage,
+  isNatoMangaUrl,
+} from "./natomanga.js";
+import { bulkUpsert, getAll, migrate } from "./storage.js";
 
 const IMPORT_JOB_KEY = "natomangaImportJob";
 const MAX_IMPORT_PAGES = 1000;
 const MAX_RETRIES = 3;
+const MAX_SERIES_ENRICH_PER_RUN = 20;
 let importRunning = false;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -53,7 +58,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: errorMessage(err) }));
     return true;
   }
-  if (msg?.type === "import-natomanga-bookmarks") {
+  if (
+    msg?.type === "import-natomanga-bookmarks" ||
+    msg?.type === "refresh-natomanga-updates"
+  ) {
     if (importRunning) {
       chrome.storage.local.get(IMPORT_JOB_KEY).then((result) =>
         sendResponse({ ok: true, inProgress: true, job: result[IMPORT_JOB_KEY] || null })
@@ -76,7 +84,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-async function importNatoMangaBookmarks({ tabId, pageUrl }) {
+async function importNatoMangaBookmarks({ tabId, pageUrl, type }) {
   if (!Number.isInteger(tabId) || !isNatoMangaUrl(pageUrl)) {
     throw new Error("Open NatoManga in the active tab before importing bookmarks.");
   }
@@ -88,9 +96,12 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
   await migrate();
   const timestamp = nowISO();
   const bookmarkUrl = new URL("/bookmark?page=1", pageUrl).href;
+  const operation = type === "refresh-natomanga-updates" ? "refresh" : "import";
   await chrome.storage.local.set({
     [IMPORT_JOB_KEY]: {
       status: "running",
+      operation,
+      phase: "bookmarks",
       startedAt: timestamp,
       updatedAt: timestamp,
       pagesCompleted: 0,
@@ -152,16 +163,69 @@ async function importNatoMangaBookmarks({ tabId, pageUrl }) {
   }
 
   const storageResult = await bulkUpsert(records, { timestamp });
+  const storedRecords = await getAll();
+  const needsSeriesPage = storedRecords
+    .filter(
+      (record) =>
+        record.site === "natomanga.com" &&
+        (!record.coverUrl || !record.latestChapter || !record.latestChapterUrl)
+    )
+    .slice(0, MAX_SERIES_ENRICH_PER_RUN);
+  const enrichments = [];
+  let seriesPagesChecked = 0;
+
+  if (needsSeriesPage.length) {
+    await updateImportJob({
+      phase: "metadata",
+      seriesPagesCompleted: 0,
+      seriesPagesTotal: needsSeriesPage.length,
+    });
+  }
+
+  for (const record of needsSeriesPage) {
+    try {
+      const response = await fetchPageInTab(tabId, record.seriesUrl);
+      const parsed = parseNatoSeriesPage(response.html, response.url || record.seriesUrl, {
+        timestamp,
+      });
+      diagnostics.push(
+        ...parsed.diagnostics.map((value) => `series-${record.slug}:${value}`)
+      );
+      if (
+        parsed.metadata &&
+        (parsed.metadata.coverUrl || parsed.metadata.latestChapter || parsed.metadata.title)
+      ) {
+        enrichments.push({ ...record, ...parsed.metadata });
+      }
+    } catch (err) {
+      diagnostics.push(`series-${record.slug}:${errorMessage(err)}`);
+    }
+    seriesPagesChecked++;
+    await updateImportJob({
+      seriesPagesCompleted: seriesPagesChecked,
+      seriesPagesTotal: needsSeriesPage.length,
+    });
+  }
+
+  const metadataStorageResult = enrichments.length
+    ? await bulkUpsert(enrichments, { timestamp })
+    : { advanced: 0, enriched: 0, unchanged: 0, skipped: 0 };
   const result = {
     ...storageResult,
+    advanced: storageResult.advanced + metadataStorageResult.advanced,
+    enriched: storageResult.enriched + metadataStorageResult.enriched,
+    unchanged: storageResult.unchanged + metadataStorageResult.unchanged,
+    skipped: storageResult.skipped + metadataStorageResult.skipped,
     pagesCompleted,
     pagesTotal,
     bookmarksFound: records.length,
+    seriesPagesChecked,
     failedPages,
     diagnostics,
   };
   await updateImportJob({
     status: "complete",
+    phase: "complete",
     finishedAt: nowISO(),
     result,
     error: null,
