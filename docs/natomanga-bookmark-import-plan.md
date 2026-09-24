@@ -9,8 +9,11 @@ tags:
 
 > **Status (2026-09-23):** Phases 1-3 are built on the `autoscraper` branch and were
 > reviewed before merge. The review's four blockers and follow-up bugs are fixed
-> ([Review before merge](#review-before-merge-2026-09-23), at the end). Before merging,
-> it still needs a live test with a signed-in NatoManga account and a real captured
+> ([Review before merge](#review-before-merge-2026-09-23), at the end). Phase 4 (covers)
+> and the manual half of Phase 5 (latest chapters, update badges, **Refresh updates**)
+> came next and were merged with those fixes
+> ([Post-merge notes](#post-merge-notes-2026-09-23)). Before merging to `master`, it
+> still needs a live test with a signed-in NatoManga account and a real captured
 > fixture. MangaRead gets the same feature next:
 > [mangaread-bookmark-import-plan.md](./mangaread-bookmark-import-plan.md).
 
@@ -575,3 +578,38 @@ remain.
   reloads the list and syncs when it finishes.
 - Pages are fetched one at a time, not about two at once as planned. That's politer, so
   keep it.
+
+## Post-merge notes (2026-09-23)
+
+Jonah's `f874f60` (covers, latest chapters, the series-page metadata phase, **Refresh
+updates**, update badges, and the cover-image referrer rule) was developed in parallel
+with the review fixes and merged in `0663106`. How the overlaps were resolved:
+
+- **"Viewed" is matched by label only.** `f874f60` also moved to label matching, but it
+  fell back to the second span when no label matched. That fallback was dropped, because
+  it's the positional risk the review was about. The latest chapter is matched by label
+  too. It's only metadata, so a miss just leaves it for the series-page phase.
+- **Latest-chapter links must belong to the same series**, on bookmark cards and series
+  pages alike, matching the rule for the last-viewed link.
+- **Series-page enrichment keeps the existing title** when the page has no heading.
+  Before, `bulkUpsert` rejected those records, cover included.
+- **Series pages are fetched from the tab's own origin.** A series saved from
+  `natomanga.com` would otherwise be a cross-origin request from `www.natomanga.com`,
+  and fail.
+- Chrome's generated `_metadata/` folder had been committed. It's now untracked and
+  gitignored.
+
+**Follow-ups:**
+
+- **The popup is short on room.** On a NatoManga chapter page, the save area stacks four
+  full-width buttons (Update chapter, Go to chapter, Save bookmarks, Refresh updates).
+  With 72px rows, fewer than two series fit in the list. Options: put the two NatoManga
+  buttons side by side, or turn Refresh into a link in the status line.
+- **Covers fill in slowly for big libraries.** The series-page phase checks at most 20
+  series per run. If the real bookmark cards turn out to lack covers, a 3,000-4,000
+  bookmark library needs many runs to fill in. A series whose page never yields a cover
+  is also rechecked every run and can crowd out the rest. `metadataCheckedAt` can't
+  order them, because the bookmark pass stamps it too. A separate "series page checked"
+  time, checked oldest first, would rotate through the library.
+- **The new permission shows a warning.** Host access to `*.2xstorage.com` makes Chrome
+  show a permission warning. For store users, it's an approval prompt when they update.

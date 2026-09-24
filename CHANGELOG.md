@@ -41,14 +41,22 @@ account. The design, phased plan, and pre-merge review are in
 - **Real titles stick.** Imported series use NatoManga's real title instead of one built
   from the URL slug. Saving a chapter, re-importing, and syncing all keep it, along with
   any cover or latest-chapter details already collected.
+- **Covers and update badges.** Library rows show each series' cover, lazy-loaded, with
+  the Shiori mark when there isn't one or it won't load. When a newer chapter is out, the
+  row shows a `+N` badge (or "NEW" when the chapter labels can't be compared) and a
+  "Latest N (3h ago)" line. Covers and latest chapters come from the bookmark cards. For
+  series still missing either, each import also checks up to 20 series pages.
+- **Refresh updates.** A second NatoManga button reruns the import to pick up new
+  chapters and fill in missing covers. It's manual on purpose. Scheduled background
+  checks wait until the parser has been validated on the live site.
 
 ### Changed
-- **Storage schema v3 and v4.** Every record gets a `status` and fields reserved for
-  upcoming covers and update tracking: `lastReadAt`, `coverUrl`, `latestChapter`,
-  `latestChapterUrl`, `latestPublishedAt`, and `metadataCheckedAt`. The metadata fields
-  are all `null` for now. A one-time migration fills them in on existing records
-  without touching their chapters. It also sets each record's `lastReadAt` from its
-  last save, and running it twice changes nothing.
+- **Storage schema v3 and v4.** Every record gets a `status` and fields for covers and
+  update tracking: `lastReadAt`, `coverUrl`, `latestChapter`, `latestChapterUrl`,
+  `latestPublishedAt`, and `metadataCheckedAt`. A one-time migration fills them in on
+  existing records without touching their chapters. It also sets each record's
+  `lastReadAt` from its last save, and running it twice changes nothing.
+- **Taller library rows** (72px, up from 56px) to fit the cover.
 - **"Last read" now means last read.** A library row shows when your reading position
   last changed (`lastReadAt`), not when the record last changed, and **Recently read**
   sorts by it. An import can't tell when you read a chapter, so imported series show no
@@ -59,14 +67,20 @@ account. The design, phased plan, and pre-merge review are in
 - **Sync: a chapter always beats no chapter.** A Plan-to-read record never replaces a
   chapter from another device, even if it's newer. And a title built from the URL slug
   never replaces a real one.
-- **New `scripting` permission.** It lets the bookmark-page requests run inside your
-  NatoManga tab, which is how they use your existing NatoManga session. Access to the tab
-  still comes from `activeTab`, which Chrome grants when you click the toolbar icon. No
-  new host permissions.
+- **New permissions.**
+  - `scripting` lets the bookmark-page requests run inside your NatoManga tab, which is
+    how they use your existing NatoManga session. Access to the tab still comes from
+    `activeTab`, which Chrome grants when you click the toolbar icon.
+  - `declarativeNetRequestWithHostAccess` and host access to `*.2xstorage.com` let
+    covers load. NatoManga serves covers from that host and refuses requests without a
+    NatoManga referrer, so one rule (`rules/natomanga-image-referer.json`) sets that
+    header on image requests to that host only. Chrome shows a new permission warning
+    for the host access.
 - **Sync keeps the new data local for now.** The cloud table requires a chapter, so
   Plan-to-read records stay on the device they were imported on. The new metadata fields
-  are kept during sync conflict resolution but not uploaded. A Supabase migration will
-  follow.
+  are kept during sync conflict resolution but not uploaded. A change to only a cover or
+  latest chapter doesn't bump a record's `updatedAt` or queue a sync. A Supabase
+  migration will follow.
 
 ### Fixed
 - **Migrations now run for local-only users.** Before, the schema migration ran only
@@ -79,22 +93,28 @@ account. The design, phased plan, and pre-merge review are in
 ### Internal
 - `natomanga.js`: a NatoManga bookmark-page parser with no dependencies. Its pure
   functions turn HTML strings into records, keep the selectors and labels in one place,
-  and report a diagnostic for each card they can't read. Tested against saved fixture
+  and report a diagnostic for each card they can't read. It also reads covers, latest
+  chapters, and dates from bookmark cards and series pages (`parseNatoSeriesPage`),
+  including NatoManga's date formats (`parseNatoDate`). Tested against saved fixture
   pages.
 - **One writer at a time.** The popup and the service worker both write the library, so
   every read-modify-write in `storage.js` now runs under one Web Lock
   (`navigator.locks`). Sync merges through a locked `updateMap`.
-- Tests: 12 → 51. New coverage:
-  - NatoManga parsing: label-based last-viewed matching, pagination, login detection,
-    and malformed input.
-  - Storage: the schema migration, bulk-import rules, JSON import round trips, and
-    concurrent writes.
+- Chrome's generated `_metadata/` folder is no longer tracked, and is gitignored.
+- Tests: 12 → 58. New coverage:
+  - NatoManga parsing: label-based last-viewed matching, covers and latest chapters,
+    series pages, date formats, pagination, login detection, and malformed input.
+  - Storage: the schema migration, bulk-import rules, metadata-only refreshes, JSON
+    import round trips, and concurrent writes.
   - Sync: the conflict rules for Plan to read and titles.
-  - The background import job: partial sign-out and a closed tab.
+  - The background import job: the series-page phase, partial sign-out, and a closed
+    tab.
+  - The manifest's cover-image referrer rule.
 
 ### Docs
 - Pre-merge review of the branch added to the NatoManga plan. All four blockers and the
-  follow-up bugs are fixed. New
+  follow-up bugs are fixed, and post-merge notes cover Jonah's covers, badges, and
+  Refresh updates work. New
   [MangaRead import plan](./docs/mangaread-bookmark-import-plan.md) (planning only).
   Roadmap, README, CONTRIBUTING, sync design, and process log updated for site bookmark
   import.

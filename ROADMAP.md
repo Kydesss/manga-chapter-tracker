@@ -31,8 +31,9 @@ grows into a small cross-platform service.
 - **Shipped:** local-first MVP (v0.1.x), cloud accounts + cross-device sync (v0.2.x,
   validated cross-device), and the Shiori brand + design system (v0.3.x).
 - **In review:** NatoManga bookmark import on the `autoscraper` branch (targeting
-  v0.4.0): a one-press import of a site's bookmarks, plus the `plan`/`reading` status
-  and storage schema v3/v4. The review fixes are in; a live test is still needed. See
+  v0.4.0): a one-press import of a site's bookmarks, plus the `plan`/`reading` status,
+  storage schema v3/v4, covers, `+N` update badges, and a manual **Refresh updates**.
+  The review fixes are in; a live test is still needed. See
   [Site bookmark import](#in-flight-site-bookmark-import-v040).
 - **Next:** MangaRead bookmark import. Planned, not built.
 - **Supported sites:** mangaread.org and natomanga.com for saving chapters; natomanga.com
@@ -87,7 +88,9 @@ pages inside the user's signed-in tab, and a single storage write that only ever
 progress forward. The adapter is the only site-specific part.
 
 - **NatoManga (built, in review).** Jonah's importer: one **Save bookmarks** press walks
-  every `/bookmark?page=N` page. The plan and the pre-merge review are in
+  every `/bookmark?page=N` page, then fills in missing covers and latest chapters from
+  up to 20 series pages. **Refresh updates** reruns it. The plan and the pre-merge
+  review are in
   [natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md). The
   review's four blockers and follow-up bugs are fixed, with regression tests. Before
   merging, it still needs a live test with a signed-in NatoManga account and a real
@@ -108,7 +111,9 @@ progress forward. The adapter is the only site-specific part.
   custom sites. Adding a site built on Madara could bring import along with URL parsing.
 - **Bundle C:** Bookmark pages can list each series' latest chapter all at once. That's
   cheaper and politer than fetching every series page. Prefer bookmark-page metadata and
-  fall back to per-series fetches. Schema v3 already has the metadata fields.
+  fall back to per-series fetches. For NatoManga this already landed: covers, latest
+  chapters, per-series `+N` badges, and a manual refresh. Scheduled checks and the
+  toolbar badge remain.
 - **Sync:** Plan-to-read records don't sync yet, because the cloud table requires a
   chapter. A cloud schema migration is now needed to keep one library across devices.
 - **Progress is sacred:** Reading position only moves forward, so an importer that
@@ -187,11 +192,13 @@ and the latest chapter, so metadata, live tracking, and custom-site selectors al
 on it.
 
 - **Richer metadata.** Real series titles (replacing slug-derived ones) and cover
-  thumbnails on the cards, for built-in and custom sites. Site bookmark import already
-  brings real titles for the series it imports, and schema v3 has the fields for covers
-  and latest chapters.
-- **Live update detection.** A background job (`chrome.alarms`, staggered, polite) checks
-  followed series for the latest chapter. Toolbar badge counts series with updates;
+  thumbnails on the cards, for built-in and custom sites. *Partly landed:* NatoManga
+  bookmark import brings real titles and covers for the series it imports. Covers are
+  remote images, and NatoManga's cover host needs a referrer rule (`declarativeNetRequest`).
+- **Live update detection.** *Partly landed:* NatoManga series get per-series `+N`
+  badges and a manual **Refresh updates**. Still to do: a background job
+  (`chrome.alarms`, staggered, polite) that checks followed series for the latest
+  chapter. Toolbar badge counts series with updates;
   per-series "+N" badges show how far ahead each is; quiet by default, OS notifications
   only as a later per-series opt-in. Per-series and global off switches in Settings.
   Once latest is known, the save area can offer "Go to latest chapter" as a third action
