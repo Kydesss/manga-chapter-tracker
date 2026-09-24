@@ -12,3 +12,7 @@ node_modules/
 *.zip
 *.crx
 *.pem
+
+# Chrome writes this into an unpacked extension's folder when it loads
+# (indexed declarativeNetRequest rulesets). Generated, never committed.
+_metadata/
