@@ -106,13 +106,3 @@ Verified on 2026-11-12:
 
 Remaining release checks: rolled-back production rehearsal, owner approval before
 applying the migration, and a real two-device smoke test after deployment.
-
-- `saveChecked`: stale library, changed series, deleted meanwhile, unchanged.
-- Popup flows in headless Chrome: a save after an outside change redraws instead
-  of writing.
-- Set chapter: link building (built-in, custom, `*`, decimals), pasted links
-  (same series, other series, not a chapter), direction and reset marker, stale
-  dialog.
-- Push: the race above against the fake server (with `push_series` modelled),
-  first sync with existing cloud rows, a stale base, the missing-function
-  fallback, three-round limit.

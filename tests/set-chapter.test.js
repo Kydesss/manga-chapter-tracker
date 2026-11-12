@@ -45,3 +45,14 @@ test("custom sites build whole chapter links and request pasted links for decima
   assert.equal(resolveChapterInput("2", saved, wildcard).needLink, true);
   assert.equal(resolveChapterInput("https://example.com/read/a/volume-1/ch-2", saved, wildcard).ok, true);
 });
+
+test("a chapter link is only built when it parses back to the same series", () => {
+  // A crafted backup record whose slug isn't one path segment: the built link
+  // would point at another page, so none is offered.
+  const crafted = { ...record, slug: "blue-lock/extra" };
+  assert.equal(chapterLinkFor(crafted, "41"), null);
+  assert.equal(resolveChapterInput("41", crafted).needLink, true);
+  // A record still carrying NatoManga's old domain gets the current one.
+  const old = { ...record, seriesUrl: "https://natomanga.com/manga/blue-lock" };
+  assert.equal(chapterLinkFor(old, "41"), "https://www.manganami.com/manga/blue-lock/chapter-41");
+});

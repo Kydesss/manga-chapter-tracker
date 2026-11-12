@@ -1267,3 +1267,26 @@ test("saveIfAllowed only writes when the decision is save", async () => {
   assert.equal(ok.saved.chapter, "3");
   assert.equal(data.series[stored().id].dirty, true);
 });
+
+test("merging into another account drops the old account's cloud versions", async () => {
+  const record = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-40");
+  await upsert(record);
+  data.series[record.id].cloudSyncedAt = "2026-11-12T19:00:00.123456+00:00"; // account A's row
+  await adoptLibrary({ id: "user-b", email: "b@example.test" });
+  assert.equal(data.series[record.id].cloudSyncedAt, null, "no base from A's cloud on B's");
+  assert.equal(data.series[record.id].chapter, "40");
+});
+
+test("a backup restore keeps the stored cloud version, never the backup's", async () => {
+  const record = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-40");
+  await upsert(record);
+  const base = "2026-11-12T19:00:00.123456+00:00";
+  data.series[record.id].cloudSyncedAt = base;
+  const later = { ...record, chapter: "45", chapterUrl: record.chapterUrl.replace("40", "45"), updatedAt: "2030-01-01T00:00:00.000Z", cloudSyncedAt: "1999-01-01T00:00:00+00:00" };
+  await importRecords([later]);
+  assert.equal(data.series[record.id].chapter, "45");
+  assert.equal(data.series[record.id].cloudSyncedAt, base);
+  const other = parseChapterUrl("https://www.manganami.com/manga/kagurabachi/chapter-3");
+  await importRecords([{ ...other, cloudSyncedAt: "1999-01-01T00:00:00+00:00" }]);
+  assert.equal(data.series[other.id].cloudSyncedAt, undefined, "a new series from a backup has no base");
+});
