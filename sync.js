@@ -30,6 +30,13 @@ const REST = `${SUPABASE_URL}/rest/v1/series`;
 const PUSH_BATCH = 500;
 const PULL_PAGE = 1000;
 const THROTTLE_MS = 30000;
+// The cloud schema this build writes. Rows without it are rejected by the
+// table (see supabase/migrations), so builds from before it can't push.
+const CLIENT_SCHEMA = 2;
+// Each pull re-reads this far behind the cursor: a row's synced_at is taken
+// when it's written but becomes visible at commit, so a slow write can appear
+// just behind rows already pulled. Rows read twice merge to the same result.
+const PULL_OVERLAP_MS = 2 * 60 * 1000;
 
 // Concurrency control. The popup and the library page each import this module,
 // so each has its own copy of this state. Within one context, requests that
@@ -59,19 +66,42 @@ function toRow(rec, userId) {
     site: rec.site,
     slug: rec.slug,
     title: rec.title,
-    chapter: rec.chapter,
-    chapter_url: rec.chapterUrl,
+    chapter: rec.chapter ?? null,
+    chapter_url: rec.chapterUrl ?? null,
     series_url: rec.seriesUrl,
+    last_read_at: timestampOrNull(rec.lastReadAt),
+    progress_at: timestampOrNull(rec.progressAt),
+    progress_reset_at: timestampOrNull(rec.progressResetAt),
     created_at: rec.createdAt,
     updated_at: rec.updatedAt,
     deleted: !!rec.deleted,
+    client_schema: CLIENT_SCHEMA,
   };
+}
+
+// An optional timestamp Postgres will accept, or null. A value that doesn't
+// parse would fail the whole upload batch, every pass. (Storage clears these
+// on upgrade and import; this is the backstop.)
+function timestampOrNull(value) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+// Postgres returns "...123+00:00" where the extension writes "...123Z". The
+// merge compares timestamps as strings, so the same moment must read the same
+// or every pulled row looks changed and is pushed back. Clients only write
+// millisecond precision, so this loses nothing. (synced_at is left as the
+// server sent it: it's only ever handed back to the server.)
+function iso(value) {
+  if (value == null) return null;
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? value : new Date(t).toISOString();
 }
 
 // Links on a site's old domain (rows pushed before the site moved, or by a
 // device on an older version) are read as the current domain, the same way
 // the v5 migration rewrote local records, so both sides compare equal.
 export function fromRow(row) {
+  const updatedAt = iso(row.updated_at);
   return {
     id: row.id,
     site: row.site,
@@ -82,24 +112,31 @@ export function fromRow(row) {
     seriesUrl: upgradeSiteUrl(row.series_url),
     siteName: SITE_NAME[row.site] || row.site,
     status: row.chapter == null ? "plan" : "reading",
-    // Before the dedicated cloud column exists, updated_at is the best
-    // available approximation for when this synced chapter was saved.
-    lastReadAt: row.chapter == null ? null : row.updated_at,
+    // Taken as stored: null means unknown (an import), and must round-trip as
+    // null or the record would look changed on every pass. The migration
+    // filled both for rows written before these columns existed.
+    lastReadAt: row.chapter == null ? null : iso(row.last_read_at),
+    progressAt: row.chapter == null ? null : iso(row.progress_at),
+    progressResetAt: iso(row.progress_reset_at),
     coverUrl: null,
     latestChapter: null,
     latestChapterUrl: null,
     latestPublishedAt: null,
     metadataCheckedAt: null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: iso(row.created_at),
+    updatedAt,
     deleted: !!row.deleted,
   };
 }
 
-// The current Supabase schema requires a chapter and chapter URL. Plan-to-read
-// records remain local and dirty until the later nullable-column migration.
+// The table keeps a chapter and its link together (both set, or both null for
+// Plan to read). A record that breaks that (only possible from an old backup)
+// would fail its whole batch, so it stays local and dirty instead.
 function isCloudCompatible(rec) {
-  return typeof rec.chapter === "string" && typeof rec.chapterUrl === "string";
+  const chapter = rec.chapter ?? null;
+  const url = rec.chapterUrl ?? null;
+  if (chapter === null) return url === null;
+  return typeof chapter === "string" && typeof url === "string";
 }
 
 // --- Authenticated fetch (refreshes the token once on 401) ----------------
@@ -134,20 +171,56 @@ async function authedFetch(url, opts, userId, allowRetry = true) {
 
 // --- Pull / Push ----------------------------------------------------------
 
+// Rows changed since `cursor` (a server synced_at), oldest first.
+//   - Starts a little behind the cursor (PULL_OVERLAP_MS): a row's synced_at
+//     is taken when it's written but becomes visible at commit.
+//   - Stops at a watermark: the newest synced_at visible when the pull starts.
+//     Rows written while a slow pull runs wait for the next pass, so they
+//     can't move the cursor past an earlier-stamped row that commits late.
+//   - Pages by (synced_at, id), so rows changing mid-pull can't shift a page.
+// Returns { rows, watermark }; watermark is null when there's nothing to pull.
 async function pull(cursor, userId) {
+  const since = cursor ? new Date(Date.parse(cursor) - PULL_OVERLAP_MS).toISOString() : null;
+  const sinceFilter = since ? `synced_at.gt.${JSON.stringify(since)}` : null;
+
+  const top = await getRows(
+    `select=synced_at&order=synced_at.desc&limit=1` + andFilter([sinceFilter]),
+    userId
+  );
+  if (!top.length) return { rows: [], watermark: null };
+  const watermark = top[0].synced_at;
+  const upTo = `synced_at.lte.${JSON.stringify(watermark)}`;
+
   const rows = [];
-  let offset = 0;
+  let last = null;
   for (;;) {
-    let url = `${REST}?select=*&order=updated_at.asc&limit=${PULL_PAGE}&offset=${offset}`;
-    if (cursor) url += `&updated_at=gt.${encodeURIComponent(cursor)}`;
-    const res = await authedFetch(url, { method: "GET" }, userId);
-    if (!res.ok) throw new Error(`Pull failed (${res.status}): ${await res.text()}`);
-    const page = await res.json();
+    const after = last
+      ? `or(synced_at.gt.${JSON.stringify(last.synced_at)},and(synced_at.eq.${JSON.stringify(
+          last.synced_at
+        )},id.gt.${JSON.stringify(last.id)}))`
+      : sinceFilter;
+    const page = await getRows(
+      `select=*&order=synced_at.asc,id.asc&limit=${PULL_PAGE}` + andFilter([upTo, after]),
+      userId
+    );
     rows.push(...page);
     if (page.length < PULL_PAGE) break;
-    offset += PULL_PAGE;
+    last = page[page.length - 1];
   }
-  return rows;
+  return { rows, watermark };
+}
+
+// PostgREST's logical filter: &and=(a,b,...), values JSON-quoted (safe for
+// the "+" and ":" in timestamps once URL-encoded).
+function andFilter(parts) {
+  const present = parts.filter(Boolean);
+  return present.length ? `&and=${encodeURIComponent(`(${present.join(",")})`)}` : "";
+}
+
+async function getRows(query, userId) {
+  const res = await authedFetch(`${REST}?${query}`, { method: "GET" }, userId);
+  if (!res.ok) throw new Error(`Pull failed (${res.status}): ${await res.text()}`);
+  return res.json();
 }
 
 async function push(records, userId) {
@@ -229,7 +302,7 @@ async function passOnce() {
 
     // 1. PULL remote changes since our cursor.
     const cursor = await getCursor();
-    const rows = await pull(cursor, userId);
+    const { rows, watermark } = await pull(cursor, userId);
     const remoteRecords = rows.map(fromRow);
 
     // 2. MERGE into local (never deletes on absence; sets dirty where we differ).
@@ -248,17 +321,11 @@ async function passOnce() {
     // Records edited while the push was in flight stay dirty for the next pass.
     await markSynced(pushRecords);
 
-    // 4. Advance the cursor. Known gap: these updated_at values are client edit
-    //    times (pushed by devices), not a server change order, so a record
-    //    stamped ahead of real time can hide later changes from incremental
-    //    pulls. Fixing it needs a server-assigned change column; see the
-    //    roadmap's Sync hardening.
-    const newCursor = maxTimestamp([
-      cursor,
-      ...rows.map((r) => r.updated_at),
-      ...pushRecords.map((r) => r.updatedAt),
-    ]);
-    if (newCursor) await setCursor(newCursor);
+    // 4. Advance the cursor to the pull's watermark. synced_at is set by the
+    //    server, so a device's clock can't move it. Our own pushes don't move
+    //    it: the next pull re-reads them and finds nothing to change.
+    const newCursor = laterTimestamp(cursor, watermark);
+    if (newCursor && newCursor !== cursor) await setCursor(newCursor);
 
     return {
       ok: true,
@@ -305,10 +372,10 @@ export async function resolveAccount(choice, asked = {}) {
   });
 }
 
-function maxTimestamp(values) {
-  let max = null;
-  for (const v of values) {
-    if (v && (max === null || v > max)) max = v;
-  }
-  return max;
+// The later of two server timestamps, compared as instants (the cursor may be
+// in a different format from the rows, e.g. the schema v7 restart value).
+function laterTimestamp(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return Date.parse(b) >= Date.parse(a) ? b : a;
 }

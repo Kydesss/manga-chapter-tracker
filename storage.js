@@ -18,7 +18,12 @@ import { SESSION_KEY } from "./auth.js";
 
 const KEY = "series"; // { [id]: record }
 const SCHEMA_KEY = "schemaVersion";
-const CURSOR_KEY = "lastSyncCursor"; // server timestamp of the last pulled change
+// The largest server-assigned synced_at pulled so far (schema v7; before that
+// it held client updated_at values). Set once any sync has run, so it also
+// answers "has this device synced before?".
+const CURSOR_KEY = "lastSyncCursor";
+// Where a pull starts when the cursor has to be rebuilt: everything, once.
+const CURSOR_START = "1970-01-01T00:00:00.000Z";
 const SNAPSHOT_KEY = "preSyncSnapshot"; // safety backup before first-ever sync
 // Whose library this is: { id, email } of the account it syncs with, or
 // { unknown: true } for a library that synced before owners were recorded.
@@ -36,8 +41,9 @@ const LIBRARY = Symbol("library");
 const LOCK_NAME = "shiori-library";
 
 // 2 = sync fields; 3 = status + series metadata fields; 4 = lastReadAt backfill;
-// 5 = links moved off a site's old domain; 6 = library owner recorded
-const CURRENT_SCHEMA = 6;
+// 5 = links moved off a site's old domain; 6 = library owner recorded;
+// 7 = progressResetAt, and the cursor moves to the server's change order
+const CURRENT_SCHEMA = 7;
 
 const URL_FIELDS = ["chapterUrl", "seriesUrl", "latestChapterUrl"];
 
@@ -58,6 +64,11 @@ export function withUpgradedUrls(record) {
 const SERIES_DEFAULTS = {
   status: "reading",
   lastReadAt: null,
+  // When the current chapter was set (a save, an advancing import, an Undo),
+  // and when the series' reading history last restarted (a removal or a
+  // deliberate move back). Both synced; see merge.js rule 5.
+  progressAt: null,
+  progressResetAt: null,
   coverUrl: null,
   latestChapter: null,
   latestChapterUrl: null,
@@ -127,6 +138,15 @@ function keepKnownMetadata(incoming, existing) {
 //       upgrade: that account (switching accounts takes a sign-out and a
 //       sign-in, so the current session is the one that has been syncing).
 //       Signed out: unknown, and the next sign-in asks before syncing.
+//   v7: progressResetAt (null) and progressAt on every record, here and in
+//       parked libraries. progressAt comes from lastReadAt, which merges have
+//       always kept with the chapter (updatedAt can't be used: a merge by an
+//       older version bumps it on a stale chapter). Timestamps that older
+//       versions stored in Postgres's "+00:00" form become "Z", so they match
+//       what sync now reads. The cursor now holds the server's synced_at
+//       instead of client edit times, so a set cursor (here and in parked
+//       libraries) restarts from CURSOR_START: still "synced before", and the
+//       next pull fetches everything once.
 export async function migrate() {
   return withLibraryLock(async () => {
     const { [SCHEMA_KEY]: version } = await chrome.storage.local.get(SCHEMA_KEY);
@@ -152,16 +172,106 @@ export async function migrate() {
         r = { ...r, lastReadAt: r.updatedAt };
       }
       if (from < 5) r = withUpgradedUrls(r);
+      // progressAt comes from the read time the record had before this
+      // upgrade, not the v4 guess above (Codex review, round 5).
+      if (from < 7) r = toV7(r, original.lastReadAt);
       if (r !== original) {
         map[id] = r;
         migrated++;
       }
     }
-    await writeMap(map);
-    if (from < 6) await recordLegacyOwner();
-    await chrome.storage.local.set({ [SCHEMA_KEY]: CURRENT_SCHEMA });
+    // One write for everything (chrome.storage applies a set call as a unit).
+    // An interrupted upgrade then leaves nothing half-done: a retry starts
+    // from the original records, not from ones the v4 step already guessed a
+    // read time for (Codex review, round 6).
+    await chrome.storage.local.set({
+      [KEY]: map,
+      ...(from < 6 ? await legacyOwnerUpdate() : {}),
+      ...(from < 7 ? await parkedAndCursorUpdate() : {}),
+      [SCHEMA_KEY]: CURRENT_SCHEMA,
+    });
     return { migrated };
   });
+}
+
+async function parkedAndCursorUpdate() {
+  const r = await chrome.storage.local.get([CURSOR_KEY, PARKED_KEY]);
+  const update = {};
+  if (r[CURSOR_KEY]) update[CURSOR_KEY] = CURSOR_START;
+  if (r[PARKED_KEY]) {
+    update[PARKED_KEY] = Object.fromEntries(
+      Object.entries(r[PARKED_KEY]).map(([id, lib]) => {
+        if (!lib) return [id, lib];
+        const series = Object.fromEntries(
+          Object.entries(lib.series || {}).map(([sid, rec]) => [sid, toV7({ ...SERIES_DEFAULTS, ...rec }, rec.lastReadAt)])
+        );
+        return [id, { ...lib, series, cursor: lib.cursor ? CURSOR_START : lib.cursor ?? null }];
+      })
+    );
+  }
+  return update;
+}
+
+const TIMESTAMP_FIELDS = [
+  "createdAt",
+  "updatedAt",
+  "lastReadAt",
+  "progressAt",
+  "progressResetAt",
+  "latestPublishedAt",
+  "metadataCheckedAt",
+];
+
+// One format for every stored timestamp ("...123Z"), so the merge's string
+// comparisons see the same moment as equal. Returns the same object when
+// nothing changed.
+export function withNormalTimestamps(record) {
+  let next = record;
+  for (const field of TIMESTAMP_FIELDS) {
+    const v = record[field];
+    if (typeof v !== "string") continue;
+    const t = Date.parse(v);
+    if (Number.isNaN(t)) continue;
+    const normal = new Date(t).toISOString();
+    if (normal !== v) {
+      if (next === record) next = { ...record };
+      next[field] = normal;
+    }
+  }
+  return next;
+}
+
+// Optional timestamps the cloud stores as timestamptz. One that doesn't parse
+// (an older backup import accepted any string) becomes null: unknown locally,
+// and an upload Postgres would accept instead of rejecting the whole batch.
+const NULLABLE_TIMESTAMP_FIELDS = ["lastReadAt", "progressAt", "progressResetAt", "latestPublishedAt", "metadataCheckedAt"];
+
+export function withValidTimestamps(record) {
+  let next = record;
+  for (const field of NULLABLE_TIMESTAMP_FIELDS) {
+    const v = record[field];
+    if (v != null && (typeof v !== "string" || Number.isNaN(Date.parse(v)))) {
+      if (next === record) next = { ...record };
+      next[field] = null;
+    }
+  }
+  return next;
+}
+
+// A record brought up to schema v7 (see migrate). Same object if unchanged.
+// progressAt comes from `readTime`: the read time the record already had, not
+// one an earlier step of the same upgrade guessed from updatedAt (v4), since
+// updatedAt may have been refreshed by an older version's merge on a stale
+// chapter. With no read time it stays unknown, which a later reset treats as
+// older than itself.
+function toV7(record, readTime) {
+  let r = withValidTimestamps(withNormalTimestamps(record));
+  const t = typeof readTime === "string" ? Date.parse(readTime) : NaN;
+  // An unreadable stored time (a backup could hold any string) stays unknown.
+  if (hasChapter(r.chapter) && !r.progressAt && !Number.isNaN(t)) {
+    r = { ...r, progressAt: new Date(t).toISOString() };
+  }
+  return r;
 }
 
 function needsFieldBackfill(r) {
@@ -170,6 +280,8 @@ function needsFieldBackfill(r) {
     r.dirty === undefined ||
     r.status === undefined ||
     r.lastReadAt === undefined ||
+    r.progressAt === undefined ||
+    r.progressResetAt === undefined ||
     METADATA_FIELDS.some((field) => r[field] === undefined)
   );
 }
@@ -225,13 +337,21 @@ export async function count() {
 // A Plan-to-read save (no chapter) never erases progress: on a series you're
 // already reading it changes nothing and returns the record as it was. A
 // removed series has no progress to keep, so planning it starts it fresh.
-export async function upsert(record) {
+//
+// `resetProgress`: this save deliberately moves the series back (the popup
+// warned and the user confirmed). It stamps progressResetAt with the save's
+// own time, so sync keeps the earlier chapter instead of restoring the
+// furthest one (merge.js rule 5).
+export async function upsert(record, { resetProgress = false } = {}) {
   return withLibraryLock(async () => {
     const map = await readMap();
     const existing = map[record.id];
     if (!hasChapter(record.chapter) && existing && !existing.deleted && hasChapter(existing.chapter)) {
       return existing;
     }
+    // Never older than the record it replaces (a tombstone or a save stamped
+    // ahead of this device's clock), so the save wins merges on recency.
+    const updatedAt = existing ? stampAfter(record.updatedAt, existing.updatedAt) : record.updatedAt;
     map[record.id] = {
       ...SERIES_DEFAULTS,
       ...existing,
@@ -241,11 +361,15 @@ export async function upsert(record) {
       status: record.chapter == null ? record.status || "plan" : "reading",
       deleted: false,
       dirty: true,
-      // Never older than the record it replaces (a tombstone or a save stamped
-      // ahead of this device's clock), so the save wins merges on recency.
-      updatedAt: existing ? stampAfter(record.updatedAt, existing.updatedAt) : record.updatedAt,
+      updatedAt,
       createdAt: existing?.createdAt || record.updatedAt,
+      // A save sets the chapter now, so it counts against any earlier reset.
+      progressAt: hasChapter(record.chapter) ? updatedAt : null,
+      progressResetAt: existing?.progressResetAt ?? null,
     };
+    if (resetProgress && hasChapter(record.chapter)) {
+      map[record.id].progressResetAt = map[record.id].updatedAt;
+    }
     await writeMap(map);
     return map[record.id];
   });
@@ -282,7 +406,9 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
         skipped++;
         continue;
       }
-      const record = withUsableChapter(withUpgradedUrls(raw));
+      // Timestamps in one format, and unreadable ones dropped (Codex review,
+      // round 8), as for migrations and backups.
+      const record = withUsableChapter(withValidTimestamps(withNormalTimestamps(withUpgradedUrls(raw))));
       const previous = deduped.get(record.id);
       deduped.set(record.id, previous ? preferFurtherRecord(previous, record) : record);
     }
@@ -300,7 +426,7 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
         continue;
       }
       if (!existing || existing.deleted) {
-        map[incoming.id] = normalizeImportedRecord(incoming, timestamp, existing?.createdAt);
+        map[incoming.id] = normalizeImportedRecord(incoming, timestamp, existing);
         added++;
         continue;
       }
@@ -336,7 +462,10 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
       }
 
       const syncRelevantChange = !sameImportSyncContent(existing, merged);
-      merged.updatedAt = syncRelevantChange ? timestamp : existing.updatedAt;
+      // Stamped after the record it replaces, which is never before its reset
+      // marker, so an advance always counts in merges.
+      merged.updatedAt = syncRelevantChange ? stampAfter(timestamp, existing.updatedAt) : existing.updatedAt;
+      if (shouldAdvance) merged.progressAt = merged.updatedAt;
       merged.dirty = syncRelevantChange ? true : existing.dirty === true;
       map[incoming.id] = merged;
       if (shouldAdvance) advanced++;
@@ -357,8 +486,12 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
   });
 }
 
-function normalizeImportedRecord(record, timestamp, existingCreatedAt) {
+// `existing`: a removed series being restored (restoreDeleted), if any. Its
+// reset marker is kept, so a device that missed the removal can't bring the
+// old chapter back. An import never sets a marker of its own.
+function normalizeImportedRecord(record, timestamp, existing) {
   const chapter = hasChapter(record.chapter) ? record.chapter : null;
+  const updatedAt = existing ? stampAfter(timestamp, existing.updatedAt) : timestamp;
   return {
     ...SERIES_DEFAULTS,
     ...record,
@@ -367,8 +500,10 @@ function normalizeImportedRecord(record, timestamp, existingCreatedAt) {
     chapterUrl: chapter == null ? null : record.chapterUrl ?? null,
     // Unknown unless the source reported it: an import is not a read.
     lastReadAt: chapter == null ? null : record.lastReadAt ?? null,
-    createdAt: existingCreatedAt || record.createdAt || timestamp,
-    updatedAt: timestamp,
+    progressAt: chapter == null ? null : updatedAt,
+    progressResetAt: existing?.progressResetAt ?? null,
+    createdAt: existing?.createdAt || record.createdAt || timestamp,
+    updatedAt,
     deleted: false,
     dirty: true,
   };
@@ -442,6 +577,8 @@ const IMPORT_CONTENT_FIELDS = [
   "chapter",
   "chapterUrl",
   "lastReadAt",
+  "progressAt",
+  "progressResetAt",
   "coverUrl",
   "latestChapter",
   "latestChapterUrl",
@@ -454,7 +591,7 @@ function sameImportContent(a, b) {
   return IMPORT_CONTENT_FIELDS.every((field) => (a[field] ?? null) === (b[field] ?? null));
 }
 
-// The subset of fields the cloud stores (see sync.js toRow), plus status.
+// The fields the cloud stores (see sync.js toRow), plus status.
 const IMPORT_SYNC_FIELDS = [
   "site",
   "slug",
@@ -463,6 +600,9 @@ const IMPORT_SYNC_FIELDS = [
   "status",
   "chapter",
   "chapterUrl",
+  "lastReadAt",
+  "progressAt",
+  "progressResetAt",
   "deleted",
 ];
 
@@ -484,7 +624,10 @@ export async function remove(id, { epoch } = {}) {
     if (!existing) return null;
     // Strictly later than the record it replaces: an Undo can stamp ahead of
     // this device's clock, and a remove that sorted before it would lose.
-    map[id] = { ...existing, deleted: true, dirty: true, updatedAt: laterThan(existing.updatedAt) };
+    // The removal also restarts the reading history: once the series comes
+    // back, a device that never saw the removal can't revive the old chapter.
+    const updatedAt = laterThan(existing.updatedAt);
+    map[id] = { ...existing, deleted: true, dirty: true, updatedAt, progressResetAt: updatedAt };
     await writeMap(map);
     // Non-enumerable: invisible to spreads, storage, and comparisons.
     return Object.defineProperty({ ...existing }, LIBRARY, { value: await readEpoch() });
@@ -540,9 +683,14 @@ export async function restore(id, previous = null) {
     if (!current.deleted && !usable) return null;
 
     const updatedAt = laterThan(current.updatedAt);
+    // Undo reverses the removal, so the removal's reset doesn't apply between
+    // these two: both chapters count as set now, and the furthest one wins
+    // (a stale device's removal can carry a further chapter than `previous`).
+    // The marker itself stays on the series, so progress from before the
+    // removal held only by devices that never saw it still can't come back.
     const merged = resolveConflict(
-      { ...(usable || current), deleted: false, updatedAt },
-      { ...current, deleted: false }
+      { ...(usable || current), deleted: false, updatedAt, progressAt: updatedAt },
+      { ...current, deleted: false, progressAt: updatedAt }
     );
     // Already live and already at least as far along: nothing to change.
     if (
@@ -631,12 +779,13 @@ export async function getOwner() {
   return (await readOwnerState()).owner;
 }
 
-async function recordLegacyOwner() {
+// The v6 owner record, as part of migrate()'s single write ({} if none).
+async function legacyOwnerUpdate() {
   const r = await chrome.storage.local.get([OWNER_KEY, CURSOR_KEY, SESSION_KEY]);
-  if (r[OWNER_KEY] || !r[CURSOR_KEY]) return;
+  if (r[OWNER_KEY] || !r[CURSOR_KEY]) return {};
   const user = r[SESSION_KEY]?.user;
   const owner = user?.id ? ownerOf(user) : { unknown: true };
-  await chrome.storage.local.set({ [OWNER_KEY]: owner });
+  return { [OWNER_KEY]: owner };
 }
 
 // How this library relates to the signed-in user:
@@ -709,7 +858,13 @@ export async function adoptLibrary(user, { epoch } = {}) {
   return withLibraryLock(async () => {
     if (epoch !== undefined && epoch !== (await readEpoch())) return { adopted: 0, stale: true };
     const map = await readMap();
-    for (const id of Object.keys(map)) if (map[id].deleted) delete map[id];
+    // The other account's history stays with it: its removals are dropped,
+    // and so are its reset markers, which would otherwise disqualify this
+    // account's own further progress on the same series.
+    for (const id of Object.keys(map)) {
+      if (map[id].deleted) delete map[id];
+      else if (map[id].progressResetAt) map[id] = { ...map[id], progressResetAt: null };
+    }
     const { [PARKED_KEY]: stored } = await chrome.storage.local.get(PARKED_KEY);
     const parked = { ...(stored || {}) };
     const mine = parked[user.id];
@@ -778,6 +933,8 @@ const OPTIONAL_STRING_FIELDS = [
   "createdAt",
   "updatedAt",
   "lastReadAt",
+  "progressAt",
+  "progressResetAt",
   "coverUrl",
   "latestChapter",
   "latestChapterUrl",
@@ -839,7 +996,7 @@ export async function importRecords(records) {
 // schema v3/v4 fields the same way the migration fills them, and links on a
 // site's old domain move to its current one (v5).
 function normalizeBackupRecord(raw) {
-  const rec = withUpgradedUrls(withStringOptionals(raw));
+  const rec = withValidTimestamps(withNormalTimestamps(withUpgradedUrls(withStringOptionals(raw))));
   const chapter = rec.chapter ?? null;
   return {
     ...SERIES_DEFAULTS,
@@ -848,6 +1005,18 @@ function normalizeBackupRecord(raw) {
     chapterUrl: chapter == null ? null : rec.chapterUrl ?? null,
     status: chapter == null ? "plan" : "reading",
     lastReadAt: rec.lastReadAt ?? (chapter == null ? null : rec.updatedAt ?? null),
+    // From the backup's own times only. The lastReadAt guess above is for
+    // display; if it counted as the set time, a stale chapter in a backup
+    // (with a merge-refreshed updatedAt) could beat a reset. A backup made by
+    // this version always has the field, and null there means "unknown", which
+    // must survive export and re-import; only older backups, without the
+    // field, fall back to their stored read time.
+    progressAt:
+      chapter == null
+        ? null
+        : rec.progressAt !== undefined
+          ? rec.progressAt || null
+          : rec.lastReadAt || null,
     deleted: rec.deleted === true,
     createdAt: rec.createdAt || rec.updatedAt,
   };

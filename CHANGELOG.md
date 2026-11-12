@@ -71,9 +71,44 @@ reference.
   anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
   replaces a working link or advances a series, and a new or restored series sent that
   way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
-- Tests: 31 → 98 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, and cross-context sync).
+- **Cloud schema v2** (migration in `supabase/migrations/`, applied to the live project
+  on 2026-11-12;
+  see [docs/cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)):
+  - **Plan to read syncs** across devices. Chapter and link are nullable in the cloud
+    and always travel together.
+  - **Sync follows the server's change order.** Incremental pulls use a `synced_at`
+    the server assigns, so a device with a fast clock can no longer make other devices
+    miss changes. Each pull re-reads a 2-minute window behind the cursor and pages by
+    `(synced_at, id)`. Storage schema v7 restarts the cursor once, so the first pass
+    after updating pulls everything.
+  - **Moving back on purpose sticks.** Saving an earlier chapter from the popup, after
+    its "This would move you back" warning, sets a synced `progressResetAt`, and progress
+    from before it no longer counts in merges. Sync used to restore the furthest chapter.
+    Each chapter carries `progressAt` (when it was set), which merges never refresh, so
+    an older install's merge can't make a stale chapter look newer than a reset. A
+    chapter whose set time is unknown counts as older than any reset, and a chapter from
+    before a reset never beats Plan to read.
+  - **The same chapter on two devices settles** on the more recently set (then read)
+    copy, so their times converge instead of being uploaded back and forth.
+  - **A removal is a synced boundary.** Removing a series sets the same marker, so a
+    device that never saw the removal can no longer revive the old chapter after the
+    series is restarted. Closes the known gap from PR #3.
+  - **"Last read" syncs** (`last_read_at`). An unknown read time stays unknown.
+  - **Merge (account isolation) drops the other account's reset markers**, as it already
+    dropped its removals.
+  - **Pulls stop at a watermark** read at the start, so a slow pull can't move the
+    cursor past a row that commits late.
+  - Storage schema v7 also normalizes timestamps an older version stored as `+00:00`.
+  - **Older installs stop pushing** once the migration runs: rows must carry
+    `client_schema`, which older builds don't send. Their changes wait locally until
+    they update.
+- Tests: 31 → 157 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, cross-context sync, account isolation, and cloud schema v2 against a fake of the migrated table).
 
 ### Fixed since the removal
+- **Cloud timestamps no longer look changed on every pull.** Postgres returns
+  `...123+00:00` where the extension writes `...123Z`, so the same moment never compared
+  equal, and every pulled row was uploaded again once. Pulled timestamps are now
+  normalized. (With the new pull window this would have re-uploaded rows forever.)
 - **Account isolation.** Signing out and back in as a different Google account no longer
   uploads the first account's library to the second. The library now records the account
   it syncs with, and every sync pass checks it before pulling or pushing. A different
@@ -103,8 +138,8 @@ reference.
   deleted series, the tombstone's old chapter no longer wins under "furthest chapter".
   Without this, planning a removed series while signed in would turn back into Reading
   at the old chapter once sync pulled the tombstone. Found in Codex review. Known gap: a
-  device that never saw the deletion can still revive the old chapter; the fix needs a
-  synced deletion boundary (see the roadmap's Sync hardening).
+  device that never saw the deletion can still revive the old chapter; fixed by cloud
+  schema v2's reset marker (see Added).
 - **The MangaRead importer is off the roadmap.** Site bookmark import is paused with no
   site planned. The research stays in `docs/mangaread-bookmark-import-plan.md`.
 

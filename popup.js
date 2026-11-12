@@ -47,6 +47,10 @@ const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
 let pendingTabId = null; // the tab `pending` came from, so we can navigate it
+// The save area warned that saving moves the series back. Clicking Save after
+// that warning is a deliberate move back, which sync must keep (storage.upsert
+// `resetProgress`), not undo with the furthest chapter.
+let pendingMovesBack = false;
 let allRecords = []; // every saved series (source of truth in memory)
 let libraryEpoch; // which library allRecords came from (storage.js getLibrary)
 let filtered = []; // current search/sort view, the array we virtualize
@@ -95,6 +99,7 @@ async function refreshSaveArea() {
   // Is this series already tracked? Show the relationship so a save is never
   // a surprise overwrite.
   const existing = await getOne(pending.id);
+  pendingMovesBack = false;
 
   if (pending.chapter == null) {
     refreshSeriesSaveArea(existing);
@@ -122,6 +127,7 @@ async function refreshSaveArea() {
         existing.chapter
       )}. This would move you back to ${escapeHtml(pending.chapter)}.</div>`;
       saveBtn.textContent = "Update chapter";
+      pendingMovesBack = true;
     } else {
       // NaN: we can't rank these labels, so state the saved position without
       // claiming a direction rather than wrongly warning about moving back.
@@ -185,7 +191,10 @@ function refreshSeriesSaveArea(existing) {
 
 saveBtn.addEventListener("click", async () => {
   if (!pending) return;
-  const saved = await upsert({ ...pending, updatedAt: new Date().toISOString() });
+  const saved = await upsert(
+    { ...pending, updatedAt: new Date().toISOString() },
+    { resetProgress: pendingMovesBack }
+  );
   showToast(
     saved.chapter == null
       ? `Added ${saved.title} to Plan to read`

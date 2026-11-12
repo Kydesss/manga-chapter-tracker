@@ -2,6 +2,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  adoptLibrary,
   bulkUpsert,
   getAll,
   importRecords,
@@ -57,7 +58,7 @@ test("schema migration preserves legacy data, adds v3 fields, and backfills last
   const migrated = data.series[legacy.id];
 
   assert.deepEqual(result, { migrated: 1 });
-  assert.equal(data.schemaVersion, 6);
+  assert.equal(data.schemaVersion, 7);
   for (const [key, value] of Object.entries(legacy)) {
     if (key === "chapterUrl" || key === "seriesUrl") continue; // v5 moves the domain
     assert.deepEqual(migrated[key], value, `${key} should be preserved`);
@@ -139,6 +140,8 @@ function stored(over = {}) {
     chapter: "3",
     chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-3",
     lastReadAt: "2026-09-01T00:00:00.000Z",
+    progressAt: "2026-09-01T00:00:00.000Z",
+    progressResetAt: null,
     coverUrl: null,
     latestChapter: null,
     latestChapterUrl: null,
@@ -271,7 +274,7 @@ test("v4 migration backfills lastReadAt only where it was never recorded", async
   data.series = { a: legacy, b: imported, c: plan };
 
   assert.deepEqual(await migrate(), { migrated: 1 });
-  assert.equal(data.schemaVersion, 6);
+  assert.equal(data.schemaVersion, 7);
   assert.equal(data.series.a.lastReadAt, "2026-07-01T00:00:00.000Z");
   assert.equal(data.series.b.lastReadAt, "2026-09-22T12:00:00.000Z");
   assert.equal(data.series.c.lastReadAt, null);
@@ -329,7 +332,7 @@ test("a JSON backup with old NatoManga links restores them on manganami.com", as
 });
 
 test("an up-to-date schema leaves an import's unknown read time alone", async () => {
-  data.schemaVersion = 5;
+  data.schemaVersion = 7;
   data.series = { a: stored({ id: "a", lastReadAt: null }) };
   assert.deepEqual(await migrate(), { migrated: 0 });
   assert.equal(data.series.a.lastReadAt, null);
@@ -902,4 +905,267 @@ test("a JSON import drops optional fields that aren't strings instead of storing
   assert.equal(rec.coverUrl, null);
   assert.equal(typeof (rec.createdAt ?? ""), "string");
   assert.ok(rec.lastReadAt === null || typeof rec.lastReadAt === "string");
+});
+
+// --- progressResetAt and schema v7 (cloud schema v2) ------------------------
+
+test("removing a series stamps its reset marker with the removal time", async () => {
+  data.schemaVersion = 7;
+  data.series = { [stored().id]: stored({ updatedAt: "2026-09-01T00:00:00.000Z" }) };
+  await remove(stored().id);
+  const r = data.series[stored().id];
+  assert.equal(r.deleted, true);
+  assert.equal(r.progressResetAt, r.updatedAt);
+});
+
+test("Undo after a removal keeps the marker, and the restored chapter beats the cloud's tombstone", async () => {
+  data.schemaVersion = 7;
+  const id = stored().id;
+  data.series = { [id]: stored({ chapter: "40", chapterUrl: "https://x.test/40", updatedAt: "2026-09-01T00:00:00.000Z" }) };
+  const previous = await remove(id);
+  const tombstone = structuredClone(data.series[id]); // what the cloud now holds
+  const restored = await restore(id, previous);
+  assert.equal(restored.chapter, "40");
+  assert.equal(restored.progressResetAt, tombstone.progressResetAt);
+  // Merging with the tombstone (as a later sync would) keeps chapter 40.
+  const merged = resolveConflict(restored, { ...tombstone });
+  assert.equal(merged.deleted, false);
+  assert.equal(merged.chapter, "40");
+});
+
+test("a confirmed move back stamps the marker; an ordinary save keeps the old one", async () => {
+  data.schemaVersion = 7;
+  const id = stored().id;
+  data.series = { [id]: stored({ chapter: "40", progressResetAt: null, updatedAt: "2026-09-01T00:00:00.000Z" }) };
+
+  const back = await upsert(
+    { ...stored(), chapter: "3", chapterUrl: "https://x.test/3", updatedAt: "2026-10-01T00:00:00.000Z" },
+    { resetProgress: true }
+  );
+  assert.equal(back.chapter, "3");
+  assert.equal(back.progressResetAt, back.updatedAt);
+
+  const forward = await upsert({ ...stored(), chapter: "4", chapterUrl: "https://x.test/4", updatedAt: "2026-10-02T00:00:00.000Z" });
+  assert.equal(forward.progressResetAt, back.progressResetAt, "a normal save doesn't move the marker");
+  assert.ok(forward.updatedAt >= forward.progressResetAt);
+});
+
+test("a Plan-to-read save never sets a reset marker", async () => {
+  data.schemaVersion = 7;
+  data.series = {};
+  const planned = await upsert(
+    { ...stored(), chapter: null, chapterUrl: null, status: "plan", updatedAt: "2026-10-01T00:00:00.000Z" },
+    { resetProgress: true }
+  );
+  assert.equal(planned.progressResetAt, null);
+});
+
+test("imports never set a reset marker, and restoring a removed series keeps the removal's", async () => {
+  data.schemaVersion = 7;
+  const id = stored().id;
+  data.series = { [id]: stored({ chapter: "40", updatedAt: "2026-09-01T00:00:00.000Z" }) };
+  await remove(id);
+  const marker = data.series[id].progressResetAt;
+
+  await bulkUpsert(
+    [{ ...stored(), chapter: "2", chapterUrl: "https://x.test/2", progressResetAt: "2030-01-01T00:00:00.000Z" }],
+    { restoreDeleted: true, timestamp: "2026-01-01T00:00:00.000Z" } // a device clock far behind
+  );
+  const r = data.series[id];
+  assert.equal(r.deleted, false);
+  assert.equal(r.progressResetAt, marker, "the import's own marker is ignored");
+  assert.ok(r.updatedAt > marker, "stamped after the tombstone, so its chapter counts");
+
+  data.series.other = stored({ id: "natomanga.com:other", slug: "other" });
+  await bulkUpsert([{ ...stored({ id: "natomanga.com:new", slug: "new" }), progressResetAt: "2030-01-01T00:00:00.000Z" }]);
+  assert.equal(data.series["natomanga.com:new"].progressResetAt, null);
+});
+
+test("v7 migration adds the marker and restarts set cursors from the beginning", async () => {
+  data.schemaVersion = 6;
+  data.lastSyncCursor = "2026-09-01T00:00:00.000Z";
+  data.parkedLibraries = {
+    b: { owner: { id: "b" }, series: {}, cursor: "2026-08-01T00:00:00.000Z", parkedAt: "2026-10-01T00:00:00.000Z" },
+    c: { owner: { id: "c" }, series: {}, cursor: null, parkedAt: "2026-10-01T00:00:00.000Z" },
+  };
+  const r = stored();
+  delete r.progressResetAt;
+  data.series = { [r.id]: r };
+
+  await migrate();
+  assert.equal(data.schemaVersion, 7);
+  assert.equal(data.series[r.id].progressResetAt, null);
+  assert.equal(data.series[r.id].dirty, false, "a migration is not an edit");
+  assert.equal(data.lastSyncCursor, "1970-01-01T00:00:00.000Z", "still counts as synced before");
+  assert.equal(data.parkedLibraries.b.cursor, "1970-01-01T00:00:00.000Z");
+  assert.equal(data.parkedLibraries.c.cursor, null, "a never-synced library stays never-synced");
+});
+
+test("v7 migration leaves a device that never synced without a cursor", async () => {
+  data.schemaVersion = 6;
+  delete data.lastSyncCursor;
+  data.series = {};
+  await migrate();
+  assert.equal(data.lastSyncCursor, undefined);
+});
+
+test("a JSON backup carries the reset marker, and a malformed one is dropped", async () => {
+  data.schemaVersion = 7;
+  data.series = {};
+  await importRecords([
+    stored({ progressResetAt: "2026-10-01T00:00:00.000Z" }),
+    stored({ id: "natomanga.com:bad", slug: "bad", progressResetAt: 12345 }),
+  ]);
+  assert.equal(data.series[stored().id].progressResetAt, "2026-10-01T00:00:00.000Z");
+  assert.equal(data.series["natomanga.com:bad"].progressResetAt, null);
+});
+
+test("v7 takes progressAt from lastReadAt, not from an updatedAt a merge refreshed", async () => {
+  data.schemaVersion = 6;
+  const r = stored({ chapter: "40", lastReadAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-10-02T00:00:00.000Z" });
+  delete r.progressAt;
+  delete r.progressResetAt;
+  data.series = { [r.id]: r };
+  await migrate();
+  assert.equal(data.series[r.id].progressAt, "2026-09-01T00:00:00.000Z");
+});
+
+test("v7 normalizes Postgres-format timestamps, here and in parked libraries", async () => {
+  data.schemaVersion = 6;
+  const pg = (iso) => iso.replace("Z", "+00:00");
+  const r = stored({ lastReadAt: pg("2026-09-01T00:00:00.000Z"), updatedAt: pg("2026-09-01T00:00:00.000Z"), createdAt: pg("2026-01-01T00:00:00.000Z") });
+  delete r.progressAt;
+  data.series = { [r.id]: r };
+  data.parkedLibraries = { b: { owner: { id: "b" }, cursor: null, series: { [r.id]: structuredClone(r) } } };
+  await migrate();
+  for (const rec of [data.series[r.id], data.parkedLibraries.b.series[r.id]]) {
+    assert.equal(rec.lastReadAt, "2026-09-01T00:00:00.000Z");
+    assert.equal(rec.updatedAt, "2026-09-01T00:00:00.000Z");
+    assert.equal(rec.createdAt, "2026-01-01T00:00:00.000Z");
+    assert.equal(rec.progressAt, "2026-09-01T00:00:00.000Z");
+    assert.equal(rec.progressResetAt, null);
+  }
+});
+
+test("Merge doesn't carry the other account's reset markers into this account's progress", async () => {
+  // Codex review, round 1: A restarted the series at chapter 3 in October; B
+  // had read to chapter 100 in September. Merging A into B keeps B's 100.
+  data.schemaVersion = 7;
+  const id = stored().id;
+  data.libraryOwner = { id: "a", email: "a@example.test" };
+  data.series = {
+    [id]: stored({ chapter: "3", chapterUrl: "https://x.test/3", progressAt: "2026-10-02T00:00:00.000Z", progressResetAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-02T00:00:00.000Z" }),
+  };
+  data.parkedLibraries = {
+    b: { owner: { id: "b" }, cursor: "2026-09-30T00:00:00.000Z", series: { [id]: stored({ chapter: "100", chapterUrl: "https://x.test/100", progressAt: "2026-09-15T00:00:00.000Z", updatedAt: "2026-09-15T00:00:00.000Z" }) } },
+  };
+  await adoptLibrary({ id: "b", email: "b@example.test" });
+  assert.equal(data.series[id].chapter, "100");
+  assert.equal(data.series[id].progressResetAt, null);
+});
+
+test("a JSON backup in Postgres timestamp format is normalized", async () => {
+  data.schemaVersion = 7;
+  data.series = {};
+  await importRecords([stored({ updatedAt: "2026-09-01T00:00:00.000+00:00", lastReadAt: "2026-09-01T00:00:00+00:00" })]);
+  const r = data.series[stored().id];
+  assert.equal(r.updatedAt, "2026-09-01T00:00:00.000Z");
+  assert.equal(r.lastReadAt, "2026-09-01T00:00:00.000Z");
+  assert.equal(r.progressAt, "2026-09-01T00:00:00.000Z");
+});
+
+test("v7 leaves progressAt unknown when there's no read time, never using updatedAt", async () => {
+  data.schemaVersion = 6;
+  const r = stored({ chapter: "40", lastReadAt: null, updatedAt: "2026-10-02T00:00:00.000Z" });
+  delete r.progressAt;
+  data.series = { [r.id]: r };
+  await migrate();
+  assert.equal(data.series[r.id].progressAt, null);
+});
+
+test("a backup's unknown read time stays unknown, so a stale chapter in it can't beat a reset", async () => {
+  // Codex review, round 3.
+  data.schemaVersion = 7;
+  const id = stored().id;
+  data.series = { [id]: stored({ chapter: "3", chapterUrl: "https://x.test/3", progressAt: "2026-10-02T00:00:00.000Z", progressResetAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-02T00:00:00.000Z" }) };
+  const backup = stored({ chapter: "40", chapterUrl: "https://x.test/40", updatedAt: "2026-10-03T00:00:00.000Z" });
+  delete backup.lastReadAt;
+  delete backup.progressAt;
+  await importRecords([backup]);
+  assert.equal(data.series[id].chapter, "3");
+});
+
+test("an unknown set time survives export and re-import, so the stale chapter still can't beat a reset", async () => {
+  // Codex review, round 4: import a legacy record (unknown times), export it,
+  // then import the export into a library restarted after a reset.
+  data.schemaVersion = 7;
+  data.series = {};
+  const id = stored().id;
+  const legacy = stored({ chapter: "40", chapterUrl: "https://x.test/40", updatedAt: "2026-10-03T00:00:00.000Z" });
+  delete legacy.lastReadAt;
+  delete legacy.progressAt;
+  await importRecords([legacy]);
+  assert.equal(data.series[id].progressAt, null);
+  const exported = JSON.parse(JSON.stringify(await getAll())); // what Export writes
+
+  data.series = { [id]: stored({ chapter: "3", chapterUrl: "https://x.test/3", progressAt: "2026-10-02T00:00:00.000Z", progressResetAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-02T00:00:00.000Z" }) };
+  await importRecords(exported);
+  assert.equal(data.series[id].chapter, "3");
+});
+
+test("upgrading straight from v0.3 (schema 2) doesn't turn the v4 read-time guess into a set time", async () => {
+  // Codex review, round 5: v0.3 records have no lastReadAt. The v4 step
+  // guesses it from updatedAt for display; v7 must not count that guess.
+  data.schemaVersion = 2;
+  data.series = {
+    a: { id: "a", site: "natomanga.com", slug: "a", title: "A", chapter: "40", chapterUrl: "https://x.test/40", seriesUrl: "https://x.test/a", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-10-03T00:00:00.000Z", deleted: false, dirty: false },
+  };
+  await migrate();
+  assert.equal(data.series.a.lastReadAt, "2026-10-03T00:00:00.000Z", "still shown as last read");
+  assert.equal(data.series.a.progressAt, null, "but its set time is unknown");
+});
+
+test("an upgrade interrupted partway leaves nothing half-done, so the retry doesn't count the read-time guess", async () => {
+  // Codex review, round 6.
+  data.schemaVersion = 2;
+  data.series = {
+    a: { id: "a", site: "natomanga.com", slug: "a", title: "A", chapter: "40", chapterUrl: "https://x.test/40", seriesUrl: "https://x.test/a", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-10-03T00:00:00.000Z", deleted: false, dirty: false },
+  };
+  const realSet = chrome.storage.local.set;
+  let calls = 0;
+  chrome.storage.local.set = async (values) => {
+    if (calls++ === 0) {
+      await realSet(values); // the first write lands...
+      throw new Error("extension reloaded"); // ...and the upgrade stops
+    }
+    return realSet(values);
+  };
+  await assert.rejects(migrate());
+  chrome.storage.local.set = realSet;
+  if (data.schemaVersion !== 7) await migrate(); // only retried if it isn't done
+  assert.equal(data.schemaVersion, 7);
+  assert.equal(data.series.a.progressAt, null);
+});
+
+test("an unreadable stored read time doesn't block the upgrade", async () => {
+  // Codex review, round 6: older backup imports accepted any string.
+  data.schemaVersion = 6;
+  const r = stored({ lastReadAt: "unknown" });
+  delete r.progressAt;
+  data.series = { [r.id]: r };
+  data.parkedLibraries = { b: { owner: { id: "b" }, cursor: null, series: { [r.id]: structuredClone(r) } } };
+  await migrate();
+  assert.equal(data.schemaVersion, 7);
+  assert.equal(data.series[r.id].progressAt, null);
+  assert.equal(data.parkedLibraries.b.series[r.id].progressAt, null);
+});
+
+test("a backup with an unreadable timestamp imports it as unknown", async () => {
+  data.schemaVersion = 7;
+  data.series = {};
+  await importRecords([stored({ lastReadAt: "unknown", progressResetAt: "soon" })]);
+  const r = data.series[stored().id];
+  // Treated like a missing read time: shown as the usual estimate, never stored as "unknown".
+  assert.equal(r.lastReadAt, r.updatedAt);
+  assert.equal(r.progressResetAt, null);
 });
