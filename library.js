@@ -3,7 +3,9 @@
 // library the popup shows by status, site, and title; sorts it; and offers
 // per-series actions: Continue/Start (a read-only jump to your place), Series,
 // and Remove with Undo. Design: docs/library-page-plan.md. Also imports
-// browser bookmarks, with a preview first: docs/bookmark-import-plan.md.
+// browser bookmarks, with a preview first: docs/bookmark-import-plan.md. And
+// it's where Settings live (library.html#settings, settings-page.js):
+// docs/custom-sites-plan.md.
 //
 // Never moves a reading position: there's deliberately no "set chapter" here
 // yet, because sync's furthest-chapter rule would undo a backward move (see the
@@ -11,7 +13,9 @@
 
 import { migrate, getLibrary, remove, restore, previewBulkUpsert, bulkUpsert, OWNER_KEY } from "./storage.js";
 import { collectBookmarks } from "./bookmarks.js";
-import { SITES } from "./parser.js";
+import { getSites, siteNames } from "./sites.js";
+import { onCustomSitesChanged } from "./settings.js";
+import { createSettingsPage } from "./settings-page.js";
 import { getSession, getUserEmail, SESSION_KEY } from "./auth.js";
 import { syncNow } from "./sync.js";
 import {
@@ -23,6 +27,7 @@ import {
   isPlan,
   siteLabel,
   createResultGate,
+  PENDING_SITE_ADD_KEY,
 } from "./view.js";
 
 const $ = (id) => document.getElementById(id);
@@ -49,6 +54,9 @@ const importSummary = $("importSummary");
 const importGroups = $("importGroups");
 const importCancel = $("importCancel");
 const importConfirm = $("importConfirm");
+const settingsBtn = $("settingsBtn");
+const brandSub = $("brandSub");
+const emptySites = $("emptySites");
 
 const OVERSCAN = 6;
 const TOAST_MS = 2500; // plain confirmations only; Undo never times out
@@ -57,11 +65,16 @@ let allRecords = [];
 let libraryEpoch; // which library allRecords came from (storage.js getLibrary)
 let rows = []; // the current filtered + sorted view, which we virtualize
 let status = "all";
+let sites = []; // every site Shiori recognizes (sites.js), for names and import
+let siteNameMap = {}; // { siteId: name }
 
 // --- Data ------------------------------------------------------------------
 
 async function load({ keepScroll = false } = {}) {
   ({ records: allRecords, epoch: libraryEpoch } = await getLibrary());
+  sites = await getSites();
+  siteNameMap = siteNames(sites);
+  emptySites.textContent = listNames(sites.map((s) => s.name));
   refreshSiteOptions();
   render({ keepScroll });
 }
@@ -70,13 +83,13 @@ async function load({ keepScroll = false } = {}) {
 // choice if it still exists; otherwise fall back to All sites.
 function refreshSiteOptions() {
   const current = siteSelect.value;
-  const sites = sitesIn(allRecords);
+  const present = sitesIn(allRecords, siteNameMap);
   siteSelect.replaceChildren(new Option("All sites", "all"));
-  for (const s of sites) siteSelect.add(new Option(s.name, s.id));
-  siteSelect.value = sites.some((s) => s.id === current) ? current : "all";
+  for (const s of present) siteSelect.add(new Option(s.name, s.id));
+  siteSelect.value = present.some((s) => s.id === current) ? current : "all";
   // One site (or none) makes the filter pointless; hide it rather than offer a no-op.
-  siteSelect.hidden = sites.length < 2;
-  siteSelect.previousElementSibling.hidden = sites.length < 2;
+  siteSelect.hidden = present.length < 2;
+  siteSelect.previousElementSibling.hidden = present.length < 2;
 }
 
 // --- Rendering -------------------------------------------------------------
@@ -182,7 +195,7 @@ function renderRow(r, index) {
   where.className = plan ? "row-plan" : "row-chapter";
   where.textContent = plan ? "Plan to read" : `Chapter ${r.chapter}`;
   const when = relativeTime(r.lastReadAt);
-  sub.append(where, ` · ${siteLabel(r)}${when ? ` · ${when}` : ""}`);
+  sub.append(where, ` · ${siteLabel(r, siteNameMap)}${when ? ` · ${when}` : ""}`);
 
   main.append(title, sub);
 
@@ -305,7 +318,13 @@ function showToast(message, action = null) {
   }
   toastEl.hidden = false;
   if (action?.focus || (hadFocus && action)) toastAction.focus();
-  else if (hadFocus) searchInput.focus();
+  else if (hadFocus) fallbackFocus().focus();
+}
+
+// Somewhere visible to put focus when its control disappears: the search box
+// in the library, the Settings button otherwise (Settings, or an empty library).
+function fallbackFocus() {
+  return searchInput.offsetParent ? searchInput : settingsBtn;
 }
 
 function hideToast() {
@@ -314,7 +333,7 @@ function hideToast() {
   const hadFocus = toastEl.contains(document.activeElement);
   toastEl.hidden = true;
   toastAction.onclick = null;
-  if (hadFocus) searchInput.focus();
+  if (hadFocus) fallbackFocus().focus();
 }
 
 toastDismiss.addEventListener("click", hideToast);
@@ -430,12 +449,23 @@ window.addEventListener("resize", debounce(() => render({ keepScroll: true }), 1
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.series) reloadSoon();
+  // "Add this site" from the popup, while this tab is open.
+  if (changes[PENDING_SITE_ADD_KEY]?.newValue) settingsPage.takePendingAdd();
   // Signing in or out, or choosing an account in the popup's prompt.
   if (changes[SESSION_KEY] || changes[OWNER_KEY]) runSync();
   // A switch or merge replaced the library: a pending Undo no longer applies.
   if (changes[OWNER_KEY] && !toastDismiss.hidden && !toastEl.hidden) hideToast();
 });
 const reloadSoon = debounce(() => load({ keepScroll: true }), 150);
+
+// Sites added, edited or removed (here, in another tab, or in another browser
+// through Chrome sync): names and the Settings list follow.
+onCustomSitesChanged(
+  debounce(() => {
+    load({ keepScroll: true });
+    settingsPage.refresh();
+  }, 150)
+);
 
 // This tab can stay open for days. Push pending changes when the connection
 // comes back, and pull what other devices did when you come back to the tab.
@@ -460,7 +490,10 @@ function debounce(fn, ms) {
 // write re-plans under the library lock and is refused if the library was
 // switched to another account meanwhile.
 
-const SITE_NAMES = SITES.map((s) => s.name).join(" or ");
+// "A, B or C"
+function listNames(names) {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}` : names[0] || "";
+}
 
 // Preview groups, in display order. `open`: expanded at first.
 const IMPORT_GROUPS = [
@@ -538,7 +571,8 @@ async function openImportPreview(trigger) {
   let found;
   let plan;
   try {
-    found = collectBookmarks(await chrome.bookmarks.getTree());
+    sites = await getSites(); // sites added since the page loaded count too
+    found = collectBookmarks(await chrome.bookmarks.getTree(), { sites });
     plan = await previewBulkUpsert(found.records);
   } catch (err) {
     showToast(`Couldn't read your bookmarks: ${err?.message || err}`);
@@ -557,10 +591,10 @@ function renderImportPreview(found, plan) {
   if (!found.scanned) {
     importSummary.textContent = "You don't have any bookmarks yet.";
   } else if (!series) {
-    importSummary.textContent = `None of your ${count(found.scanned, "bookmark")} is a chapter or series page on ${SITE_NAMES}.`;
+    importSummary.textContent = `None of your ${count(found.scanned, "bookmark")} is a chapter or series page on ${listNames(sites.map((s) => s.name))}.`;
   } else {
     importSummary.textContent =
-      `${count(found.scanned - found.unsupported, "bookmark")} on ${SITE_NAMES}, ` +
+      `${count(found.scanned - found.unsupported, "bookmark")} on ${listNames(sites.map((s) => s.name))}, ` +
       `covering ${count(series, "series", "series")}. ` +
       (changes ? "Nothing is saved until you press Import." : "Your library already has everything here.");
   }
@@ -588,7 +622,7 @@ function renderImportPreview(found, plan) {
       const title = document.createElement("span");
       title.className = "import-item-title";
       title.textContent = item.title;
-      title.title = `${item.title} (${siteLabel(item)})`;
+      title.title = `${item.title} (${siteLabel(item, siteNameMap)})`;
       const detail = document.createElement("span");
       detail.className = "import-item-detail";
       detail.textContent = group.detail(item);
@@ -661,11 +695,45 @@ importDialog.addEventListener("close", () => {
   else importBtn.focus();
 });
 
+// --- Settings view -----------------------------------------------------------
+//
+// library.html#settings shows Settings instead of the library. The hash keeps
+// it in the browser's history, so Back returns to the library.
+
+const settingsPage = createSettingsPage({ showToast, show: () => setView("settings") });
+
+function isSettings() {
+  return location.hash === "#settings";
+}
+
+function setView(view) {
+  if ((view === "settings") === isSettings()) return applyView();
+  if (view === "settings") location.hash = "settings";
+  else history.pushState(null, "", location.pathname + location.search);
+  applyView();
+}
+
+function applyView() {
+  const on = isSettings();
+  document.body.classList.toggle("is-settings", on);
+  settingsBtn.textContent = on ? "Back to library" : "Settings";
+  brandSub.textContent = on ? "Settings" : "Library";
+  document.title = on ? "Shiori · Settings" : "Shiori · Library";
+  if (on) settingsPage.refresh();
+  else render({ keepScroll: true }); // the list measured nothing while hidden
+}
+
+settingsBtn.addEventListener("click", () => setView(isSettings() ? "library" : "settings"));
+window.addEventListener("hashchange", applyView);
+window.addEventListener("popstate", applyView);
+
 // --- Start -----------------------------------------------------------------
 
 async function initialize() {
   await migrate(); // also for local-only users, who never reach sync
   await load();
+  applyView();
+  settingsPage.takePendingAdd();
   runSync({ throttle: true });
 }
 

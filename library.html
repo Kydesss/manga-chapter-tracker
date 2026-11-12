@@ -13,14 +13,15 @@
       <header class="masthead">
         <div class="brand">
           <img src="icons/logo.svg" width="28" height="28" alt="" aria-hidden="true" />
-          <h1>Shiori <span class="brand-sub">Library</span></h1>
+          <h1>Shiori <span id="brandSub" class="brand-sub">Library</span></h1>
         </div>
         <div class="masthead-actions">
           <div class="sync" title="Sign in and out from the toolbar popup">
             <span id="syncDot" class="sync-dot is-signedout" aria-hidden="true"></span>
             <span id="syncStatus" aria-live="polite">Not signed in</span>
           </div>
-          <button id="importBtn" type="button" class="btn">Import bookmarks</button>
+          <button id="importBtn" type="button" class="btn library-only">Import bookmarks</button>
+          <button id="settingsBtn" type="button" class="btn">Settings</button>
         </div>
       </header>
 
@@ -58,13 +59,71 @@
           <img src="icons/logo.svg" width="48" height="48" alt="" aria-hidden="true" />
           <p class="empty-title">Nothing saved yet</p>
           <p class="empty-text">
-            Open a chapter on MangaRead or NatoManga and save it from the Shiori toolbar
-            button, or save a series page as Plan to read.
+            Open a chapter on <span id="emptySites">a supported site</span> and save it from
+            the Shiori toolbar button, or save a series page as Plan to read. Reading
+            somewhere else? Add the site in Settings.
           </p>
           <button id="importEmptyBtn" type="button" class="btn primary empty-import">Import bookmarks</button>
         </div>
         <p id="noResults" class="empty" hidden>No series match these filters.</p>
       </main>
+
+      <!-- Settings (docs/custom-sites-plan.md). Shown instead of the library at
+           library.html#settings. -->
+      <section id="settingsView" class="settings" aria-labelledby="settingsTitle">
+        <h2 id="settingsTitle" class="visually-hidden">Settings</h2>
+        <section class="settings-section" aria-labelledby="sitesTitle">
+          <div class="settings-section-head">
+            <h3 id="sitesTitle">Sites</h3>
+            <button id="addSiteOpen" type="button" class="btn">Add a site</button>
+          </div>
+          <p class="settings-help">
+            Shiori reads your place from a page's address. You can add any site whose
+            chapter addresses include the series and the chapter number. Your sites
+            follow you to Chrome on your other computers.
+          </p>
+          <ul id="siteList" class="site-list" aria-label="Sites Shiori recognizes"></ul>
+
+          <form id="siteForm" class="site-form" hidden novalidate aria-labelledby="siteFormTitle">
+            <h4 id="siteFormTitle">Add a site</h4>
+            <div class="field">
+              <label for="siteHost">Address</label>
+              <input id="siteHost" name="host" type="text" placeholder="example.com" autocomplete="off" spellcheck="false" aria-describedby="siteHostError" />
+              <p id="siteHostError" class="field-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="siteName">Name <span class="field-optional">(optional)</span></label>
+              <input id="siteName" name="name" type="text" placeholder="Shown in your library" autocomplete="off" maxlength="40" aria-describedby="siteNameError" />
+              <p id="siteNameError" class="field-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="siteChapter">Chapter page pattern</label>
+              <input id="siteChapter" name="chapterPattern" type="text" placeholder="/manga/{slug}/chapter-{chapter}" autocomplete="off" spellcheck="false" aria-describedby="siteChapterHelp siteChapterError" />
+              <p id="siteChapterHelp" class="field-help">
+                The part of a chapter's address after the site name. Write
+                <code>{slug}</code> where the series name goes, <code>{chapter}</code> where
+                the chapter number goes, and <code>*</code> for anything else that changes.
+              </p>
+              <p id="siteChapterError" class="field-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="siteSeries">Series page pattern</label>
+              <input id="siteSeries" name="seriesPattern" type="text" placeholder="/manga/{slug}" autocomplete="off" spellcheck="false" aria-describedby="siteSeriesHelp siteSeriesError" />
+              <p id="siteSeriesHelp" class="field-help">The address of the series' own page, with <code>{slug}</code> in the same place.</p>
+              <p id="siteSeriesError" class="field-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="siteTest">Test an address</label>
+              <input id="siteTest" type="url" placeholder="Paste a chapter or series address" autocomplete="off" spellcheck="false" aria-describedby="siteTestResult" />
+              <p id="siteTestResult" class="test-result" aria-live="polite"></p>
+            </div>
+            <div class="form-actions">
+              <button id="siteCancel" type="button" class="btn">Cancel</button>
+              <button id="siteSave" type="submit" class="btn primary">Add site</button>
+            </div>
+          </form>
+        </section>
+      </section>
     </div>
 
     <!-- Bookmark import preview (docs/bookmark-import-plan.md). Nothing is

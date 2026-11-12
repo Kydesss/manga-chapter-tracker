@@ -33,11 +33,15 @@ grows into a small cross-platform service.
   (2026-11-12): the full-page library, Plan to read (synced), browser-bookmark import,
   account isolation, and cloud schema v2 (server change order for the sync cursor, a
   synced progress reset marker). See the [changelog](./CHANGELOG.md).
-- **Next:** Settings, to finish Bundle A. The small fixes (popup Undo, a save shortcut,
-  parser URL variants, the popup footer's width) are on `polish/small-fixes`. Site
-  bookmark import is paused with no site planned.
-- **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
-  chapters and series.
+- **Since v0.4.0 (unreleased):** the small fixes (popup Undo, a save shortcut, parser URL
+  variants, the popup footer's width), and **Settings with custom sites**
+  (`feat/custom-sites`): add any site by address and URL patterns
+  ([custom-sites-plan.md](./docs/custom-sites-plan.md)).
+- **Next:** the rest of Settings (account and sync, data import/export moved from the
+  popup) and save reminders (Bundle B). Site bookmark import is paused with no site
+  planned.
+- **Supported sites:** mangaread.org and NatoManga (now at manganami.com) built in, plus
+  any site you add in Settings whose chapter URLs carry the series and chapter number.
 - **Surfaces:** Chrome extension.
 
 ## How this roadmap is organized
@@ -129,8 +133,10 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   as the popup, no new backend. Two areas: a rich **Library** (summary stats, status
   filter tabs, sort, large cards, management actions) and **Settings** (connected sites,
   reminders, notifications, account/sync, data import/export). Design target: the Figma
-  Make reference. *Part 1 (the Library) is in progress; see
-  [library-page-plan.md](./docs/library-page-plan.md).* It's also the options page,
+  Make reference. *The Library shipped in v0.4.0
+  ([library-page-plan.md](./docs/library-page-plan.md)); Settings started with its
+  Sites section ([custom-sites-plan.md](./docs/custom-sites-plan.md)), the rest of its
+  sections to follow.* It's also the options page,
   opened with `chrome.runtime.openOptionsPage()`. Needs a counterpart to the popup's
   reversible-action pattern: the app is where a series sitting at the wrong chapter is
   most likely to be noticed. v1 has the read-only half (Continue / Start); moving a
@@ -165,7 +171,10 @@ bookmarks in v1, with a preview).
 injected on chapter pages. Both features below need exactly this, so the content-script
 and settings plumbing is built once.
 
-- **Custom sites / connectors (phase 1).** In Settings, add a site by host + a URL
+- **Custom sites / connectors (phase 1). Done (`feat/custom-sites`):** path patterns
+  with `{slug}`, `{chapter}` and `*`, synced through `chrome.storage.sync`, no content
+  script or permission needed. Later: chapter numbers in query strings, rewriting stored
+  links when a site you added moves. Original plan: in Settings, add a site by host + a URL
   pattern with placeholders (`/manga/{slug}/chapter-{chapter}`). The parser becomes
   config-driven: built-in sites plus user patterns compile to one matcher. Pure
   URL-parsing needs no host permission; content-script features on a user site request
@@ -248,9 +257,10 @@ optional lifetime/donation tier; renaming the GitHub repo from `manga-chapter-tr
 
 Done alongside the bundle that first needs them:
 
-- **Config-driven parser** (Bundle B) - built-in and user patterns share one matcher.
+- **Config-driven parser** (Bundle B, done) - built-in and user patterns share one matcher.
 - **Shared parser / merge / sync module** (Bundle D, helps Bundle E) - one home for the rules.
-- **Settings store** (Bundle A) - a small typed wrapper over `chrome.storage` for preferences.
+- **Settings store** (Bundle A, done) - `settings.js`, a small wrapper over
+  `chrome.storage.sync` (custom sites for now).
 - **Series-page reader** (Bundle C) - offscreen-document HTML parsing. Pick one parsing
   approach for this and the bookmark adapters (see the site import open questions).
 - **Site bookmark adapters** (paused) - one interface per site for bookmark import,

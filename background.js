@@ -11,6 +11,7 @@
 
 import { signInWithGoogle, signOut } from "./auth.js";
 import { parsePageUrl } from "./parser.js";
+import { getSites } from "./sites.js";
 import { migrate, saveIfAllowed } from "./storage.js";
 import { syncNow } from "./sync.js";
 import { shortcutSaveDecision } from "./view.js";
@@ -61,7 +62,7 @@ chrome.commands.onCommand.addListener((command, tab) => {
 async function saveFromShortcut(tab) {
   if (!tab?.id) [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab?.id) return;
-  const pending = tab.url ? parsePageUrl(tab.url) : null;
+  const pending = tab.url ? parsePageUrl(tab.url, await getSites()) : null;
   if (!pending) {
     flag(tab.id, "–", "Not a chapter or series page on a supported site", IDLE);
     return;

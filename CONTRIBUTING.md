@@ -70,7 +70,10 @@ merge logic.
 ## Project layout
 
 - `manifest.json` - extension config (MV3).
-- `parser.js` - turns a chapter URL into a structured record. Add a site here.
+- `parser.js` - turns a chapter or series URL into a structured record. Built-in sites
+  live here (`BUILTIN_SITES`), along with the pattern compiler for sites added in Settings.
+- `settings.js` - the settings store (`chrome.storage.sync`) and custom-site validation.
+- `sites.js` - the current site list (built-in + custom) for the popup, shortcut and import.
 - `storage.js` - local persistence (chrome.storage.local), soft-deletes, sync bookkeeping.
   Every library write goes through here, under one lock, so don't write the `series` key
   anywhere else.
@@ -83,6 +86,7 @@ merge logic.
   closing.
 - `popup.html` / `popup.css` / `popup.js` - the toolbar popup: save and resume.
 - `library.html` / `library.css` / `library.js` - the full-page library (also the options page).
+- `settings-page.js` - the library page's Settings view (`library.html#settings`).
 - `view.js` - pure filtering, sorting, and display helpers shared by both (unit-tested).
 - `tests/` - Node unit tests.
 - `docs/` - design docs (`cloud-sync-design.md`, the bookmark import plans, including the

@@ -11,6 +11,20 @@ extension's `manifest.json` version field.
 ## [Unreleased]
 
 ### Added
+- **Add your own sites.** The library page now has **Settings** (also at
+  `library.html#settings`), and its first section, **Sites**, lets you add any site whose
+  chapter addresses include the series and the chapter number. You give its address and
+  two patterns, like `/manga/{slug}/chapter-{chapter}` and `/manga/{slug}`, and a
+  **Test an address** box shows live what a URL would save as. The popup, the save
+  shortcut and bookmark import all recognize your sites. Sites can be edited, or removed
+  with Undo; series saved from a removed site stay in your library. Your sites follow
+  you to Chrome on your other computers (`chrome.storage.sync`, one item per site, so
+  25 sites fit Chrome's 8 KB item limit); no new permissions and no database change.
+  A stored site is re-checked when read: one claiming a built-in site's id, or with a
+  pattern holding characters a URL can't (which would block uploads), is ignored.
+  Design: `docs/custom-sites-plan.md`.
+- **"Add this site" in the popup.** On a page Shiori doesn't recognize, the popup offers
+  to add the site, opening Settings with its address and the page filled in.
 - **Undo for the popup's Remove.** Removing a series shows **Undo** in the popup's
   message, as the library page does. It stays until used, dismissed (×), replaced, or
   the popup closes. Undo brings the series back at the furthest chapter it knew, and is
@@ -28,6 +42,13 @@ extension's `manifest.json` version field.
   (`/chapter-100/2` open, `/chapter-100/12` saved), the popup offers the jump back.
 
 ### Changed
+- **The parser is config-driven** (`parser.js`): the built-in sites and the ones you add
+  run through the same matcher. Patterns are never treated as regex: each path segment
+  compiles to its own anchored, escaped regex, so a pattern can't hang the popup. A site
+  you add can never take over a built-in site's address. Built-in records are unchanged.
+- **Site names in the library come from the current site list**, then the record. The
+  cloud doesn't store site names, so a series pulled from another device showed its site
+  id; it now shows the name, and renaming a site you added renames every row.
 - **More chapter URLs are recognized**: a page number after the chapter
   (`/chapter-100/2`) and a volume prefix (`vol-2-chapter-5`, `volume-3-chapter-12-5`).
   The saved link keeps the page, so Continue returns to it. Query strings and anchors
