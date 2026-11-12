@@ -4,7 +4,7 @@
 // sortable library that stays fast at thousands of entries. Also handles
 // JSON export/import for backup. Loaded as an ES module.
 
-import { parseChapterUrl } from "./parser.js";
+import { parsePageUrl } from "./parser.js";
 import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
@@ -86,11 +86,12 @@ function setGoToSaved(record, url) {
 async function refreshSaveArea() {
   const tab = await getActiveTab();
   pendingTabId = tab?.id ?? null;
-  pending = tab?.url ? parseChapterUrl(tab.url) : null;
+  pending = tab?.url ? parsePageUrl(tab.url) : null;
 
   if (!pending) {
     saveInfo.textContent =
-      "Open a chapter on a supported site (MangaRead or NatoManga) to save it.";
+      "Open a chapter or series page on a supported site (MangaRead or NatoManga) to save it.";
+    saveBtn.textContent = "Save chapter";
     saveBtn.disabled = true;
     setGoToSaved(null, null);
     return;
@@ -99,6 +100,11 @@ async function refreshSaveArea() {
   // Is this series already tracked? Show the relationship so a save is never
   // a surprise overwrite.
   const existing = await getOne(pending.id);
+
+  if (pending.chapter == null) {
+    refreshSeriesSaveArea(existing);
+    return;
+  }
   let note = "";
   let savedUrl = null;
   if (existing) {
@@ -151,12 +157,45 @@ async function refreshSaveArea() {
   setGoToSaved(existing, savedUrl);
 }
 
+// The save area on a series page: the only thing to save is "plan to read".
+// A series you're already reading has nothing to save here (planning it would
+// never erase your chapter anyway), so offer the way back to your place instead.
+function refreshSeriesSaveArea(existing) {
+  let note = "";
+  let savedUrl = null;
+  if (!existing) {
+    saveBtn.textContent = "Plan to read";
+    saveBtn.disabled = false;
+  } else if (existing.chapter == null) {
+    note = `<div class="save-note same">Already in Plan to read.</div>`;
+    saveBtn.textContent = "Planned";
+    saveBtn.disabled = true;
+  } else {
+    note = `<div class="save-note same">Reading: saved at chapter ${escapeHtml(
+      existing.chapter
+    )}.</div>`;
+    saveBtn.textContent = "Already reading";
+    saveBtn.disabled = true;
+    savedUrl = safeUrl(existing.chapterUrl);
+  }
+
+  saveInfo.innerHTML =
+    `<strong>${escapeHtml(existing?.title || pending.title)}</strong><br>Series page on ${escapeHtml(
+      pending.siteName
+    )}` + note;
+  setGoToSaved(existing, savedUrl);
+}
+
 // --- Saving ---------------------------------------------------------------
 
 saveBtn.addEventListener("click", async () => {
   if (!pending) return;
   const saved = await upsert({ ...pending, updatedAt: new Date().toISOString() });
-  showToast(`Saved ${saved.title} - ch. ${saved.chapter}`);
+  showToast(
+    saved.chapter == null
+      ? `Added ${saved.title} to Plan to read`
+      : `Saved ${saved.title} - ch. ${saved.chapter}`
+  );
   await load();
   await refreshSaveArea();
   runSync(); // push this save to the cloud if signed in (fire and forget)

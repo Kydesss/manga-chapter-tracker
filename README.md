@@ -7,7 +7,7 @@ tags:
 
 # Shiori
 
-**Never lose your place.** Shiori (栞, Japanese for bookmark) is a browser extension that tracks which chapter you're on across manga sites, in one unified library. Save the chapter you're reading with one click, then search, sort, and jump back to any series from a single popup. Already have hundreds of bookmarks on NatoManga? Import all of them in one press, with covers and new-chapter badges. Currently supports MangaRead and NatoManga (bookmark import: NatoManga, with MangaRead planned).
+**Never lose your place.** Shiori (栞, Japanese for bookmark) is a browser extension that tracks which chapter you're on across manga sites, in one unified library. Save the chapter you're reading with one click, or save a series page as Plan to read, then search, sort, and jump back to any series from a single popup. Currently supports MangaRead and NatoManga.
 
 Shiori is **local-first**: it works offline, with no account, storing everything in the browser. Signing in with Google is optional and additive — it syncs the same library across devices through Supabase, and reading position never moves backward when devices disagree.
 
@@ -41,9 +41,9 @@ Everything above works without an account. To also sync across devices, hit **Si
 
 The popup saves chapters itself, because saving is manual and only happens while the popup is open. The service worker runs the one job that has to keep going after the popup closes: the sign-in flow (see `background.js`).
 
-`parser.js` is the core of the product. `parseChapterUrl(url)` takes a URL string and returns a structured record (`{ id, site, title, chapter, chapterUrl, seriesUrl, status, ... }`) or `null` if it isn't a supported chapter page. The key idea: the chapter number is already in the URL, so one regex extracts everything. The record `id` is `site:slug` (for example `mangaread.org:blue-lock`), which is what makes saving an **upsert**: save the same series again and it updates in place instead of creating a duplicate. To support a new site, add one entry to the `SITES` array, as long as it uses the same `/manga/{slug}/chapter-{number}` shape.
+`parser.js` is the core of the product. `parseChapterUrl(url)` takes a URL string and returns a structured record (`{ id, site, title, chapter, chapterUrl, seriesUrl, status, ... }`) or `null` if it isn't a supported chapter page. `parseSeriesUrl(url)` does the same for a series page (`/manga/{slug}`), returning a Plan-to-read record with no chapter, and `parsePageUrl(url)` tries a chapter first and then a series page. The key idea: the chapter number is already in the URL, so one regex extracts everything. The record `id` is `site:slug` (for example `mangaread.org:blue-lock`), which is what makes saving an **upsert**: save the same series again and it updates in place instead of creating a duplicate. To support a new site, add one entry to the `SITES` array, as long as it uses the same `/manga/{slug}/chapter-{number}` shape.
 
-`storage.js` wraps `chrome.storage.local`. Everything lives in one object keyed by id, so `getAll`, `upsert`, and `remove` are short and fast. It also owns the sync bookkeeping: the schema migration, dirty flags, soft-delete tombstones, the pull cursor, and the safety snapshot taken before a first sync. Schema v3 adds a `status` to each record (`reading`, or `plan` for a series with no chapter yet) and fields for covers and update tracking, which nothing fills in today. Schema v4 fills in `lastReadAt` for older records. The popup and sync both write here, so every read-modify-write runs under one lock (`navigator.locks`). Always write the library through this file. If the dataset ever outgrows `chrome.storage`, swapping to IndexedDB only touches this one file, nothing else has to change.
+`storage.js` wraps `chrome.storage.local`. Everything lives in one object keyed by id, so `getAll`, `upsert`, and `remove` are short and fast. It also owns the sync bookkeeping: the schema migration, dirty flags, soft-delete tombstones, the pull cursor, and the safety snapshot taken before a first sync. Schema v3 adds a `status` to each record (`reading`, or `plan` for a series with no chapter yet) and fields for covers and update tracking, which nothing fills in today. Schema v4 fills in `lastReadAt` for older records. `bulkUpsert` is the shared write for bulk imports (nothing calls it yet; browser-bookmark import will): it only ever moves a series forward and leaves series you removed alone. A Plan-to-read save never erases a chapter. The popup and sync both write here, so every read-modify-write runs under one lock (`navigator.locks`). Always write the library through this file. If the dataset ever outgrows `chrome.storage`, swapping to IndexedDB only touches this one file, nothing else has to change.
 
 `config.js` holds the public configuration: the Supabase URL, the Supabase **publishable** key, and the Google OAuth client id. These are designed to be client-visible; the data is protected by Supabase row-level security, not by hiding them. A service-role key must never go here.
 
@@ -59,7 +59,7 @@ The popup saves chapters itself, because saving is manual and only happens while
 
 `popup.html` / `popup.css` is the interface, styled from those tokens: a save area that reflects the current tab, a search box, a sort dropdown, the scrolling library list, and a pinned footer with sync status, sign in/out, and export/import.
 
-`popup.js` wires it together. On open it runs the schema migration, then reads the active tab and runs its URL through the parser. It either enables the Save button (showing the detected series and chapter) or explains that this isn't a supported chapter page. When the tab is a different chapter of a series you already track, it also offers a secondary "Go to chapter X" that returns you to your saved position without saving. For a series marked Plan to read, the button becomes "Start reading". It renders the library (virtualized, so thousands of rows stay fast), filters as you type, sorts by recent or title, opens a series on click, removes one on the delete button, shows relative last-read times, and — when signed in — kicks off a sync pass and reflects its status.
+`popup.js` wires it together. On open it runs the schema migration, then reads the active tab and runs its URL through the parser. It either enables the Save button (showing the detected series and chapter) or explains that this isn't a supported chapter page. When the tab is a different chapter of a series you already track, it also offers a secondary "Go to chapter X" that returns you to your saved position without saving. For a series marked Plan to read, the button becomes "Start reading". On a series page instead of a chapter, it offers "Plan to read", or, for a series you're already reading, your saved chapter and the "Go to chapter X" jump. It renders the library (virtualized, so thousands of rows stay fast), filters as you type, sorts by recent or title, opens a series on click, removes one on the delete button, shows relative last-read times, and — when signed in — kicks off a sync pass and reflects its status.
 
 ## How the pieces talk
 
@@ -109,9 +109,8 @@ The parser was tested against real URLs from both sites, including decimal chapt
 
 The full product vision lives in [ROADMAP.md](./ROADMAP.md), organized into bundles of
 features that share a foundation and ship together. The NatoManga bookmark importer was
-removed before release; site bookmark import is back to planning (see
-[docs/mangaread-bookmark-import-plan.md](./docs/mangaread-bookmark-import-plan.md)). Next
-come the management surface (full-page app + statuses + bulk import), user
+removed before release, and the planned MangaRead importer was dropped, so site
+bookmark import is paused. Next come the management surface (full-page app + statuses + bulk import), user
 extensibility (custom sites + save reminders), series-page intelligence (metadata + live
 updates), a mobile web app, and the 1.0 launch (Firefox + stores + freemium cloud).
 Shipped work is in the [changelog](./CHANGELOG.md).

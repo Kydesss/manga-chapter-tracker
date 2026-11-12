@@ -1,5 +1,6 @@
 // parser.js
-// Turns a chapter-page URL into a structured record.
+// Turns a chapter-page URL (or a series-page URL, for Plan to read) into a
+// structured record.
 // This is the heart of the product: because the chapter number lives in the
 // URL, we never have to scrape page content to know where the reader is.
 
@@ -16,6 +17,11 @@ const SITES = [
 // The number can be a decimal expressed with a dash or dot, e.g. "83-2" or
 // "520-5" (meaning 83.2 / 520.5), so we must NOT assume an integer.
 const CHAPTER_RE = /\/manga\/([^/]+)\/chapter-([0-9]+(?:[-.][0-9]+)?)\/?$/i;
+
+// A series page is the chapter URL minus the chapter: /manga/{slug}, with or
+// without a trailing slash (MangaRead adds one). Anchored at the start so a
+// deeper path that merely contains "/manga/x" isn't mistaken for one.
+const SERIES_RE = /^\/manga\/([^/]+)\/?$/i;
 
 // Find which supported site a hostname belongs to (or null).
 function matchSite(hostname) {
@@ -82,6 +88,52 @@ export function parseChapterUrl(rawUrl) {
     metadataCheckedAt: null,
     updatedAt: timestamp,
   };
+}
+
+// A series page becomes a Plan-to-read record: same id and seriesUrl as the
+// chapter parser produces, so a later chapter save upgrades this same record.
+// Returns null if this URL is not a supported series page.
+export function parseSeriesUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+
+  const site = matchSite(url.hostname);
+  if (!site) return null;
+
+  const match = url.pathname.match(SERIES_RE);
+  if (!match) return null;
+
+  const slug = match[1];
+  const timestamp = new Date().toISOString();
+
+  return {
+    id: `${site.id}:${slug}`,
+    site: site.id,
+    siteName: site.name,
+    slug,
+    title: prettifyTitle(slug),
+    chapter: null,
+    chapterUrl: null,
+    seriesUrl: `${url.origin}/manga/${slug}`,
+    status: "plan",
+    lastReadAt: null, // planning to read isn't reading
+    coverUrl: null,
+    latestChapter: null,
+    latestChapterUrl: null,
+    latestPublishedAt: null,
+    metadataCheckedAt: null,
+    updatedAt: timestamp,
+  };
+}
+
+// What the popup calls: a chapter page (reading) or a series page (plan to read),
+// or null for anything else.
+export function parsePageUrl(rawUrl) {
+  return parseChapterUrl(rawUrl) || parseSeriesUrl(rawUrl);
 }
 
 // Exported for the README / tests and potential reuse.

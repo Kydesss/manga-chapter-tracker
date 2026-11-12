@@ -2,6 +2,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  bulkUpsert,
   getAll,
   importRecords,
   markSynced,
@@ -9,7 +10,7 @@ import {
   updateMap,
   upsert,
 } from "../storage.js";
-import { parseChapterUrl } from "../parser.js";
+import { parseChapterUrl, parseSeriesUrl } from "../parser.js";
 
 let data;
 
@@ -295,10 +296,11 @@ test("concurrent writes don't overwrite each other", async () => {
   await Promise.all([
     upsert(stored({ id: "saved" })),
     importRecords([stored({ id: "imported" })]),
+    bulkUpsert([stored({ id: "bulk" })], { timestamp: "2026-09-23T00:00:00.000Z" }),
     updateMap((map) => ({ ...map, synced: stored({ id: "synced" }) })),
   ]);
 
-  assert.deepEqual(Object.keys(data.series).sort(), ["imported", "saved", "synced"]);
+  assert.deepEqual(Object.keys(data.series).sort(), ["bulk", "imported", "saved", "synced"]);
 });
 
 test("markSynced keeps a record dirty if it changed while being pushed", async () => {
@@ -315,4 +317,217 @@ test("markSynced keeps a record dirty if it changed while being pushed", async (
 
   assert.equal(data.series.a.dirty, true);
   assert.equal(data.series.b.dirty, false);
+});
+
+// --- Plan to read from a series page ---------------------------------------
+
+test("planning a new series from its series page saves it as Plan to read", async () => {
+  data.schemaVersion = 4;
+  const plan = parseSeriesUrl("https://www.natomanga.com/manga/witch-and-mercenary");
+
+  const saved = await upsert(plan);
+
+  assert.equal(saved.status, "plan");
+  assert.equal(saved.chapter, null);
+  assert.equal(saved.lastReadAt, null);
+  assert.equal(saved.dirty, true);
+});
+
+test("planning a series you're already reading never erases your chapter", async () => {
+  data.schemaVersion = 4;
+  const reading = stored({ chapter: "40", dirty: false });
+  data.series = { [reading.id]: structuredClone(reading) };
+
+  const result = await upsert(parseSeriesUrl(reading.seriesUrl));
+
+  assert.deepEqual(data.series[reading.id], reading); // untouched, not even dirtied
+  assert.equal(result.chapter, "40");
+});
+
+test("planning a removed series brings it back fresh, as Plan to read", async () => {
+  data.schemaVersion = 4;
+  const removed = stored({ chapter: "40", deleted: true });
+  data.series = { [removed.id]: structuredClone(removed) };
+
+  const saved = await upsert(parseSeriesUrl(removed.seriesUrl));
+
+  assert.equal(saved.deleted, false);
+  assert.equal(saved.status, "plan");
+  assert.equal(saved.chapter, null);
+  assert.equal(saved.chapterUrl, null);
+  assert.equal(saved.createdAt, removed.createdAt);
+});
+
+test("a chapter save upgrades a planned series to reading", async () => {
+  data.schemaVersion = 4;
+  await upsert(parseSeriesUrl("https://www.natomanga.com/manga/witch-and-mercenary"));
+
+  const saved = await upsert(
+    parseChapterUrl("https://www.natomanga.com/manga/witch-and-mercenary/chapter-1")
+  );
+
+  assert.equal(saved.status, "reading");
+  assert.equal(saved.chapter, "1");
+});
+
+// --- bulkUpsert: the shared forward-only bulk write ------------------------
+
+const T = "2026-09-22T12:00:00.000Z";
+
+test("bulk import adds new series and never moves an existing one back", async () => {
+  data.schemaVersion = 4;
+  const existing = stored({ id: "a", slug: "a", chapter: "20" });
+  data.series = { a: structuredClone(existing) };
+
+  const result = await bulkUpsert(
+    [
+      stored({ id: "a", slug: "a", title: "A (Official Title)", chapter: "18" }),
+      stored({ id: "b", slug: "b", chapter: null, chapterUrl: null, status: "plan" }),
+    ],
+    { timestamp: T }
+  );
+
+  assert.deepEqual(result, {
+    added: 1,
+    advanced: 0,
+    enriched: 1,
+    unchanged: 0,
+    removed: 0,
+    skipped: 0,
+    processed: 2,
+    total: 2,
+  });
+  assert.equal(data.series.a.chapter, "20");
+  assert.equal(data.series.a.chapterUrl, existing.chapterUrl);
+  assert.equal(data.series.a.title, "A (Official Title)");
+  assert.equal(data.series.b.status, "plan");
+  assert.equal(data.series.b.chapter, null);
+  assert.equal(data.series.b.lastReadAt, null);
+});
+
+test("bulk import dedupes to the furthest chapter and doesn't invent a read time", async () => {
+  data.schemaVersion = 4;
+  data.series = {};
+
+  const result = await bulkUpsert(
+    [
+      stored({ lastReadAt: null, chapter: "8", chapterUrl: "u8" }),
+      stored({ lastReadAt: null, chapter: null, chapterUrl: null }),
+      stored({ lastReadAt: null, chapter: "10", chapterUrl: "u10" }),
+    ],
+    { timestamp: T }
+  );
+
+  const rec = Object.values(data.series)[0];
+  assert.equal(result.processed, 1);
+  assert.equal(result.added, 1);
+  assert.equal(rec.chapter, "10");
+  assert.equal(rec.chapterUrl, "u10");
+  assert.equal(rec.lastReadAt, null);
+  assert.equal(rec.dirty, true);
+});
+
+test("bulk import advances a series but keeps its last known read time", async () => {
+  data.schemaVersion = 4;
+  const existing = stored({ chapter: "20", lastReadAt: "2026-08-01T00:00:00.000Z" });
+  data.series = { [existing.id]: structuredClone(existing) };
+
+  const result = await bulkUpsert(
+    [stored({ chapter: "22.5", chapterUrl: "u22.5", lastReadAt: null })],
+    { timestamp: T }
+  );
+
+  const rec = data.series[existing.id];
+  assert.equal(result.advanced, 1);
+  assert.equal(rec.chapter, "22.5");
+  assert.equal(rec.chapterUrl, "u22.5");
+  assert.equal(rec.lastReadAt, "2026-08-01T00:00:00.000Z");
+  assert.equal(rec.updatedAt, T);
+  assert.equal(rec.dirty, true);
+});
+
+test("bulk import starts reading a planned series", async () => {
+  data.schemaVersion = 4;
+  const planned = stored({ chapter: null, chapterUrl: null, status: "plan", lastReadAt: null });
+  data.series = { [planned.id]: structuredClone(planned) };
+
+  const result = await bulkUpsert([stored({ chapter: "1", chapterUrl: "u1" })], { timestamp: T });
+
+  assert.equal(result.advanced, 1);
+  assert.equal(data.series[planned.id].status, "reading");
+  assert.equal(data.series[planned.id].chapter, "1");
+});
+
+test("bulk import never advances from or to a chapter label it can't rank", async () => {
+  data.schemaVersion = 4;
+  data.series = {
+    x: stored({ id: "x", chapter: "Extra" }),
+    n: stored({ id: "n", chapter: "5" }),
+  };
+
+  await bulkUpsert(
+    [stored({ id: "x", chapter: "9" }), stored({ id: "n", chapter: "Omake" })],
+    { timestamp: T }
+  );
+
+  assert.equal(data.series.x.chapter, "Extra");
+  assert.equal(data.series.n.chapter, "5");
+});
+
+test("bulk import leaves removed series removed unless asked to restore them", async () => {
+  data.schemaVersion = 4;
+  const removed = stored({ deleted: true, chapter: "3" });
+  data.series = { [removed.id]: structuredClone(removed) };
+
+  const skipped = await bulkUpsert([stored({ chapter: "5" })], { timestamp: T });
+  assert.equal(skipped.removed, 1);
+  assert.equal(skipped.added, 0);
+  assert.equal(data.series[removed.id].deleted, true);
+  assert.equal(data.series[removed.id].chapter, "3");
+
+  const restored = await bulkUpsert([stored({ chapter: "5" })], {
+    timestamp: T,
+    restoreDeleted: true,
+  });
+  assert.equal(restored.added, 1);
+  assert.equal(data.series[removed.id].deleted, false);
+  assert.equal(data.series[removed.id].chapter, "5");
+  assert.equal(data.series[removed.id].createdAt, removed.createdAt);
+});
+
+test("bulk import stores metadata without creating a cloud-dirty change", async () => {
+  data.schemaVersion = 4;
+  const existing = stored({ dirty: false });
+  data.series = { [existing.id]: structuredClone(existing) };
+
+  const result = await bulkUpsert(
+    [
+      stored({
+        coverUrl: "https://cdn.example/cover.jpg",
+        latestChapter: "10",
+        latestChapterUrl: "u10",
+      }),
+    ],
+    { timestamp: T }
+  );
+
+  const rec = data.series[existing.id];
+  assert.equal(result.enriched, 1);
+  assert.equal(rec.coverUrl, "https://cdn.example/cover.jpg");
+  assert.equal(rec.latestChapter, "10");
+  assert.equal(rec.dirty, false);
+  assert.equal(rec.updatedAt, existing.updatedAt);
+});
+
+test("bulk import reports unchanged and invalid records, and rejects non-arrays", async () => {
+  data.schemaVersion = 4;
+  const existing = stored();
+  data.series = { [existing.id]: structuredClone(existing) };
+
+  const result = await bulkUpsert([stored(), { id: 42 }, null], { timestamp: T });
+
+  assert.equal(result.unchanged, 1);
+  assert.equal(result.skipped, 2);
+  assert.deepEqual(data.series[existing.id], existing);
+  await assert.rejects(bulkUpsert("nope"), /must be an array/);
 });
