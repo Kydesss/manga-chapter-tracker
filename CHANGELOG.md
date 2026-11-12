@@ -34,14 +34,19 @@ reference.
   known metadata; metadata-only changes don't queue a sync. New: series the user removed
   stay removed unless the caller passes `restoreDeleted: true`, and are counted as
   `removed`. When duplicates collapse, the furthest chapter wins but a real title and
-  known metadata are kept from any duplicate. Nothing calls it yet.
-- Tests: 31 → 50 (series parsing, the plan-save guard, `bulkUpsert`, and resurrection).
+  known metadata are kept from any duplicate, and a numbered chapter beats a label like
+  "Extra". Only a numbered chapter advances a series, a planned one included. A chapter
+  without a usable http(s) link counts as no chapter: it never replaces a working link,
+  and a new series sent that way arrives as Plan to read. Nothing calls it yet.
+- Tests: 31 → 54 (series parsing, the plan-save guard, `bulkUpsert`, and resurrection).
 
 ### Changed since the removal
 - **Merge rule: a resurrection restarts the series.** When a newer save brings back a
   deleted series, the tombstone's old chapter no longer wins under "furthest chapter".
   Without this, planning a removed series while signed in would turn back into Reading
-  at the old chapter once sync pulled the tombstone. Found in Codex review.
+  at the old chapter once sync pulled the tombstone. Found in Codex review. Known gap: a
+  device that never saw the deletion can still revive the old chapter; the fix needs a
+  synced deletion boundary (see the roadmap's Sync hardening).
 - **The MangaRead importer is off the roadmap.** Site bookmark import is paused with no
   site planned. The research stays in `docs/mangaread-bookmark-import-plan.md`.
 

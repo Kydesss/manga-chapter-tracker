@@ -12,7 +12,7 @@
 // popup and the service worker both write the library; without the lock, one
 // context's write could silently undo the other's.
 
-import { resolveConflict, pickTitle, hasChapter } from "./merge.js";
+import { resolveConflict, pickTitle, hasChapter, chapterToNumber } from "./merge.js";
 
 const KEY = "series"; // { [id]: record }
 const SCHEMA_KEY = "schemaVersion";
@@ -202,7 +202,11 @@ export async function upsert(record) {
 // in parsed records. The rules:
 //   - Reading position only moves forward. An import can advance a series or
 //     start a Plan-to-read one, never move one back or blank it out. Chapter
-//     labels we can't rank ("Extra") never advance anything.
+//     labels we can't rank ("Extra") never advance anything, planned series
+//     included.
+//   - A chapter only counts with a usable http(s) link. Without one it's
+//     treated as no chapter: it can't replace a working link, and a new series
+//     arrives as Plan to read (sync can't push a chapter without its link).
 //   - Duplicates within one import collapse to the furthest chapter.
 //   - A series the user removed stays removed unless `restoreDeleted` is set.
 //   - Unknown (null) metadata never erases what we already know, and an
@@ -219,11 +223,12 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
     const deduped = new Map();
     let skipped = 0;
 
-    for (const record of records) {
-      if (!isImportableRecord(record)) {
+    for (const raw of records) {
+      if (!isImportableRecord(raw)) {
         skipped++;
         continue;
       }
+      const record = withUsableChapter(raw);
       const previous = deduped.get(record.id);
       deduped.set(record.id, previous ? preferFurtherRecord(previous, record) : record);
     }
@@ -247,7 +252,7 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
       }
 
       const shouldAdvance =
-        hasChapter(incoming.chapter) &&
+        chapterToNumber(incoming.chapter) !== null &&
         (!hasChapter(existing.chapter) ||
           compareChapterProgress(incoming.chapter, existing.chapter) > 0);
 
@@ -319,8 +324,10 @@ function normalizeImportedRecord(record, timestamp, existingCreatedAt) {
 // its URL travel together, while a real title and any known metadata are kept
 // from whichever duplicate had them.
 function preferFurtherRecord(a, b) {
+  const ra = chapterRank(a);
+  const rb = chapterRank(b);
   let winner = a;
-  if (hasChapter(b.chapter) && (!hasChapter(a.chapter) || compareChapterProgress(b.chapter, a.chapter) > 0)) {
+  if (rb > ra || (rb === 2 && ra === 2 && compareChapterProgress(b.chapter, a.chapter) > 0)) {
     winner = b;
   }
   const other = winner === a ? b : a;
@@ -331,6 +338,31 @@ function preferFurtherRecord(a, b) {
     lastReadAt: winner.lastReadAt ?? null,
     ...keepKnownMetadata(winner, other),
   };
+}
+
+// How much a duplicate's chapter is worth when collapsing: a numbered chapter
+// beats an unrankable label ("Extra"), which beats no chapter at all.
+function chapterRank(r) {
+  if (!hasChapter(r.chapter)) return 0;
+  return chapterToNumber(r.chapter) === null ? 1 : 2;
+}
+
+// An imported chapter only counts with a link we can open (and sync can push).
+// Without one, the record is treated as having no chapter.
+function withUsableChapter(record) {
+  if (!hasChapter(record.chapter)) return { ...record, chapter: null, chapterUrl: null };
+  if (isHttpUrl(record.chapterUrl)) return record;
+  return { ...record, chapter: null, chapterUrl: null, lastReadAt: null };
+}
+
+function isHttpUrl(raw) {
+  if (typeof raw !== "string") return false;
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 // Compare two chapter labels: 1 if a is further, -1 if behind, 0 if equal.

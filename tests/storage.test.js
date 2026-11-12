@@ -208,7 +208,7 @@ test("JSON export then import keeps plan-to-read records", async () => {
 
 test("JSON import can't move progress back, but can move it forward", async () => {
   data.schemaVersion = 4;
-  const existing = stored({ chapter: "30", chapterUrl: "u30", updatedAt: "2026-09-10T00:00:00.000Z" });
+  const existing = stored({ chapter: "30", chapterUrl: "https://x.test/c30", updatedAt: "2026-09-10T00:00:00.000Z" });
   data.series = { [existing.id]: existing };
 
   // A newer plan-to-read entry and a newer lower chapter both lose.
@@ -217,17 +217,17 @@ test("JSON import can't move progress back, but can move it forward", async () =
   ]);
   assert.equal(data.series[existing.id].chapter, "30");
   await importRecords([
-    stored({ chapter: "25", chapterUrl: "u25", updatedAt: "2026-09-21T00:00:00.000Z" }),
+    stored({ chapter: "25", chapterUrl: "https://x.test/c25", updatedAt: "2026-09-21T00:00:00.000Z" }),
   ]);
   assert.equal(data.series[existing.id].chapter, "30");
 
   // An older backup that is further along wins: furthest chapter, as in sync.
   const result = await importRecords([
-    stored({ chapter: "35", chapterUrl: "u35", updatedAt: "2026-08-01T00:00:00.000Z" }),
+    stored({ chapter: "35", chapterUrl: "https://x.test/c35", updatedAt: "2026-08-01T00:00:00.000Z" }),
   ]);
   assert.equal(result.updated, 1);
   assert.equal(data.series[existing.id].chapter, "35");
-  assert.equal(data.series[existing.id].chapterUrl, "u35");
+  assert.equal(data.series[existing.id].chapterUrl, "https://x.test/c35");
   assert.equal(data.series[existing.id].dirty, true);
 });
 
@@ -411,9 +411,9 @@ test("bulk import dedupes to the furthest chapter and doesn't invent a read time
 
   const result = await bulkUpsert(
     [
-      stored({ lastReadAt: null, chapter: "8", chapterUrl: "u8" }),
+      stored({ lastReadAt: null, chapter: "8", chapterUrl: "https://x.test/c8" }),
       stored({ lastReadAt: null, chapter: null, chapterUrl: null }),
-      stored({ lastReadAt: null, chapter: "10", chapterUrl: "u10" }),
+      stored({ lastReadAt: null, chapter: "10", chapterUrl: "https://x.test/c10" }),
     ],
     { timestamp: T }
   );
@@ -422,7 +422,7 @@ test("bulk import dedupes to the furthest chapter and doesn't invent a read time
   assert.equal(result.processed, 1);
   assert.equal(result.added, 1);
   assert.equal(rec.chapter, "10");
-  assert.equal(rec.chapterUrl, "u10");
+  assert.equal(rec.chapterUrl, "https://x.test/c10");
   assert.equal(rec.lastReadAt, null);
   assert.equal(rec.dirty, true);
 });
@@ -436,17 +436,17 @@ test("bulk import dedupe keeps the furthest chapter and every duplicate's known 
       stored({
         title: "Witch & Mercenary (Official)",
         chapter: "8",
-        chapterUrl: "u8",
+        chapterUrl: "https://x.test/c8",
         coverUrl: "https://cdn.example/cover.jpg",
       }),
-      stored({ title: "Witch And Mercenary", chapter: "10", chapterUrl: "u10", coverUrl: null }),
+      stored({ title: "Witch And Mercenary", chapter: "10", chapterUrl: "https://x.test/c10", coverUrl: null }),
     ],
     { timestamp: T }
   );
 
   const rec = Object.values(data.series)[0];
   assert.equal(rec.chapter, "10");
-  assert.equal(rec.chapterUrl, "u10");
+  assert.equal(rec.chapterUrl, "https://x.test/c10");
   assert.equal(rec.title, "Witch & Mercenary (Official)");
   assert.equal(rec.coverUrl, "https://cdn.example/cover.jpg");
 });
@@ -457,14 +457,14 @@ test("bulk import advances a series but keeps its last known read time", async (
   data.series = { [existing.id]: structuredClone(existing) };
 
   const result = await bulkUpsert(
-    [stored({ chapter: "22.5", chapterUrl: "u22.5", lastReadAt: null })],
+    [stored({ chapter: "22.5", chapterUrl: "https://x.test/c22.5", lastReadAt: null })],
     { timestamp: T }
   );
 
   const rec = data.series[existing.id];
   assert.equal(result.advanced, 1);
   assert.equal(rec.chapter, "22.5");
-  assert.equal(rec.chapterUrl, "u22.5");
+  assert.equal(rec.chapterUrl, "https://x.test/c22.5");
   assert.equal(rec.lastReadAt, "2026-08-01T00:00:00.000Z");
   assert.equal(rec.updatedAt, T);
   assert.equal(rec.dirty, true);
@@ -475,7 +475,7 @@ test("bulk import starts reading a planned series", async () => {
   const planned = stored({ chapter: null, chapterUrl: null, status: "plan", lastReadAt: null });
   data.series = { [planned.id]: structuredClone(planned) };
 
-  const result = await bulkUpsert([stored({ chapter: "1", chapterUrl: "u1" })], { timestamp: T });
+  const result = await bulkUpsert([stored({ chapter: "1", chapterUrl: "https://x.test/c1" })], { timestamp: T });
 
   assert.equal(result.advanced, 1);
   assert.equal(data.series[planned.id].status, "reading");
@@ -529,7 +529,7 @@ test("bulk import stores metadata without creating a cloud-dirty change", async 
       stored({
         coverUrl: "https://cdn.example/cover.jpg",
         latestChapter: "10",
-        latestChapterUrl: "u10",
+        latestChapterUrl: "https://x.test/c10",
       }),
     ],
     { timestamp: T }
@@ -541,6 +541,63 @@ test("bulk import stores metadata without creating a cloud-dirty change", async 
   assert.equal(rec.latestChapter, "10");
   assert.equal(rec.dirty, false);
   assert.equal(rec.updatedAt, existing.updatedAt);
+});
+
+test("bulk import never replaces a working chapter link with a missing or unsafe one", async () => {
+  data.schemaVersion = 4;
+  const existing = stored({ id: "a", chapter: "40" });
+  data.series = { a: structuredClone(existing) };
+
+  for (const chapterUrl of [null, undefined, "", "javascript:alert(1)", "not a url"]) {
+    await bulkUpsert([stored({ id: "a", chapter: "41", chapterUrl })], { timestamp: T });
+    assert.equal(data.series.a.chapter, "40", `chapterUrl ${String(chapterUrl)}`);
+    assert.equal(data.series.a.chapterUrl, existing.chapterUrl);
+  }
+});
+
+test("a new series whose chapter has no usable link arrives as Plan to read", async () => {
+  data.schemaVersion = 4;
+  data.series = {};
+
+  await bulkUpsert([stored({ chapter: "12", chapterUrl: null })], { timestamp: T });
+
+  const rec = Object.values(data.series)[0];
+  assert.equal(rec.status, "plan");
+  assert.equal(rec.chapter, null);
+  assert.equal(rec.chapterUrl, null);
+  assert.equal(rec.lastReadAt, null);
+});
+
+test("an unrankable label never starts reading a planned series", async () => {
+  data.schemaVersion = 4;
+  const planned = stored({ chapter: null, chapterUrl: null, status: "plan", lastReadAt: null });
+  data.series = { [planned.id]: structuredClone(planned) };
+
+  await bulkUpsert([stored({ chapter: "Extra" })], { timestamp: T });
+  assert.equal(data.series[planned.id].status, "plan");
+  assert.equal(data.series[planned.id].chapter, null);
+
+  // And a later numbered import still can.
+  await bulkUpsert([stored({ chapter: "10" })], { timestamp: T });
+  assert.equal(data.series[planned.id].status, "reading");
+  assert.equal(data.series[planned.id].chapter, "10");
+});
+
+test("bulk import dedupe prefers a numbered chapter over an unrankable label", async () => {
+  data.schemaVersion = 4;
+  const planned = stored({ chapter: null, chapterUrl: null, status: "plan", lastReadAt: null });
+  data.series = { [planned.id]: structuredClone(planned) };
+
+  await bulkUpsert(
+    [
+      stored({ chapter: "Extra", chapterUrl: "https://x.test/extra" }),
+      stored({ chapter: "10", chapterUrl: "https://x.test/c10" }),
+    ],
+    { timestamp: T }
+  );
+
+  assert.equal(data.series[planned.id].chapter, "10");
+  assert.equal(data.series[planned.id].chapterUrl, "https://x.test/c10");
 });
 
 test("bulk import reports unchanged and invalid records, and rejects non-arrays", async () => {
