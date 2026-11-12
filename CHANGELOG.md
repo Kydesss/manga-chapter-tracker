@@ -39,9 +39,18 @@ reference.
   anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
   replaces a working link or advances a series, and a new or restored series sent that
   way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
-- Tests: 31 → 55 (series parsing, the plan-save guard, `bulkUpsert`, and resurrection).
+- Tests: 31 → 62 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, and the manganami.com move).
 
 ### Changed since the removal
+- **NatoManga moved to manganami.com.** natomanga.com now permanently redirects to
+  `www.manganami.com` with the same paths, so saved NatoManga links went through a
+  redirect. Saving now works on manganami.com, and old natomanga.com links still parse.
+  Storage schema v5 rewrites saved links (chapter, series, latest chapter) to
+  manganami.com. Ids (`natomanga.com:{slug}`), chapters, `updatedAt`, and sync state are
+  untouched, so nothing is re-pushed. Cloud rows, JSON backups, and bulk imports with old
+  links are rewritten the same way on the way in, so devices still on an older version
+  converge. Only http(s) links are rewritten, so the import link checks still apply.
+  The library still shows the site as "NatoManga". Reviewed with Codex.
 - **Merge rule: a resurrection restarts the series.** When a newer save brings back a
   deleted series, the tombstone's old chapter no longer wins under "furthest chapter".
   Without this, planning a removed series while signed in would turn back into Reading

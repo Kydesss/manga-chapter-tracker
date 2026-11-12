@@ -4,12 +4,25 @@
 // This is the heart of the product: because the chapter number lives in the
 // URL, we never have to scrape page content to know where the reader is.
 
-// The two sites we support at launch. Add a new site by adding an entry here.
-// `host` is matched against the end of the hostname so both "natomanga.com"
-// and "www.natomanga.com" work.
+// The sites we support. Add a new site by adding an entry here.
+// `host` is the site's current domain, matched against the end of the hostname
+// so both "manganami.com" and "www.manganami.com" work.
+//
+// `id` is the stable key stored in every record and cloud row, so it never
+// changes, even when a site moves domain. A move adds the old domain to
+// `legacyHosts`: its URLs are still recognized, and are rewritten to
+// `canonicalOrigin` wherever they enter the library (see upgradeSiteUrl).
+//   NatoManga moved: natomanga.com now 301-redirects to www.manganami.com with
+//   the same paths (checked 2026-11-12). The site calls itself MangaNato there.
 const SITES = [
   { id: "mangaread.org", host: "mangaread.org", name: "MangaRead" },
-  { id: "natomanga.com", host: "natomanga.com", name: "NatoManga" },
+  {
+    id: "natomanga.com",
+    host: "manganami.com",
+    name: "NatoManga",
+    legacyHosts: ["natomanga.com"],
+    canonicalOrigin: "https://www.manganami.com",
+  },
 ];
 
 // Both sites share the same shape:
@@ -23,10 +36,43 @@ const CHAPTER_RE = /\/manga\/([^/]+)\/chapter-([0-9]+(?:[-.][0-9]+)?)\/?$/i;
 // deeper path that merely contains "/manga/x" isn't mistaken for one.
 const SERIES_RE = /^\/manga\/([^/]+)\/?$/i;
 
-// Find which supported site a hostname belongs to (or null).
+function hostMatches(hostname, domain) {
+  return hostname === domain || hostname.endsWith("." + domain);
+}
+
+function isLegacyHost(site, hostname) {
+  return (site.legacyHosts || []).some((d) => hostMatches(hostname, d));
+}
+
+// Find which supported site a hostname belongs to (or null), current or old domain.
 function matchSite(hostname) {
   const h = hostname.toLowerCase();
-  return SITES.find((s) => h === s.host || h.endsWith("." + s.host)) || null;
+  return SITES.find((s) => hostMatches(h, s.host) || isLegacyHost(s, h)) || null;
+}
+
+// Rewrite a URL on a site's old domain to its current one, keeping the path,
+// query, and fragment. Anything else (other sites, non-URLs, null) comes back
+// unchanged, so this is safe to run over any stored link. Only http(s) links
+// are rewritten: turning, say, an ftp:// link into https would let it slip past
+// the link checks that guard imports.
+export function upgradeSiteUrl(raw) {
+  if (typeof raw !== "string") return raw;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return raw;
+  const h = url.hostname.toLowerCase();
+  const site = SITES.find((s) => s.canonicalOrigin && isLegacyHost(s, h));
+  if (!site) return raw;
+  return `${site.canonicalOrigin}${url.pathname}${url.search}${url.hash}`;
+}
+
+// The origin to build a series URL from: the page's own, unless it's an old domain.
+function originFor(site, url) {
+  return isLegacyHost(site, url.hostname.toLowerCase()) ? site.canonicalOrigin : url.origin;
 }
 
 // Turn a slug like "blue-lock" into a readable "Blue Lock".
@@ -77,8 +123,8 @@ export function parseChapterUrl(rawUrl) {
     slug,
     title: prettifyTitle(slug),
     chapter: chapterLabel(chapterRaw),
-    chapterUrl: url.href,
-    seriesUrl: `${url.origin}/manga/${slug}`,
+    chapterUrl: upgradeSiteUrl(url.href),
+    seriesUrl: `${originFor(site, url)}/manga/${slug}`,
     status: "reading",
     lastReadAt: timestamp,
     coverUrl: null,
@@ -118,7 +164,7 @@ export function parseSeriesUrl(rawUrl) {
     title: prettifyTitle(slug),
     chapter: null,
     chapterUrl: null,
-    seriesUrl: `${url.origin}/manga/${slug}`,
+    seriesUrl: `${originFor(site, url)}/manga/${slug}`,
     status: "plan",
     lastReadAt: null, // planning to read isn't reading
     coverUrl: null,

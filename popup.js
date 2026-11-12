@@ -90,7 +90,7 @@ async function refreshSaveArea() {
 
   if (!pending) {
     saveInfo.textContent =
-      "Open a chapter or series page on a supported site (MangaRead or NatoManga) to save it.";
+      "Open a chapter or series page on a supported site (MangaRead or NatoManga, now at manganami.com) to save it.";
     saveBtn.textContent = "Save chapter";
     saveBtn.disabled = true;
     setGoToSaved(null, null);

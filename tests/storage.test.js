@@ -53,10 +53,13 @@ test("schema migration preserves legacy data, adds v3 fields, and backfills last
   const migrated = data.series[legacy.id];
 
   assert.deepEqual(result, { migrated: 1 });
-  assert.equal(data.schemaVersion, 4);
+  assert.equal(data.schemaVersion, 5);
   for (const [key, value] of Object.entries(legacy)) {
+    if (key === "chapterUrl" || key === "seriesUrl") continue; // v5 moves the domain
     assert.deepEqual(migrated[key], value, `${key} should be preserved`);
   }
+  assert.equal(migrated.chapterUrl, "https://www.manganami.com/manga/blue-lock/chapter-348-5");
+  assert.equal(migrated.seriesUrl, "https://www.manganami.com/manga/blue-lock");
   assert.equal(migrated.status, "reading");
   // A legacy record was last read when it was last saved.
   assert.equal(migrated.lastReadAt, legacy.updatedAt);
@@ -127,10 +130,10 @@ function stored(over = {}) {
     siteName: "NatoManga",
     slug: "witch-and-mercenary",
     title: "Witch & Mercenary",
-    seriesUrl: "https://www.natomanga.com/manga/witch-and-mercenary",
+    seriesUrl: "https://www.manganami.com/manga/witch-and-mercenary",
     status: "reading",
     chapter: "3",
-    chapterUrl: "https://www.natomanga.com/manga/witch-and-mercenary/chapter-3",
+    chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-3",
     lastReadAt: "2026-09-01T00:00:00.000Z",
     coverUrl: null,
     latestChapter: null,
@@ -264,14 +267,65 @@ test("v4 migration backfills lastReadAt only where it was never recorded", async
   data.series = { a: legacy, b: imported, c: plan };
 
   assert.deepEqual(await migrate(), { migrated: 1 });
-  assert.equal(data.schemaVersion, 4);
+  assert.equal(data.schemaVersion, 5);
   assert.equal(data.series.a.lastReadAt, "2026-07-01T00:00:00.000Z");
   assert.equal(data.series.b.lastReadAt, "2026-09-22T12:00:00.000Z");
   assert.equal(data.series.c.lastReadAt, null);
 });
 
-test("an up-to-date schema leaves an import's unknown read time alone", async () => {
+test("v5 migration moves NatoManga links to manganami.com without touching anything else", async () => {
   data.schemaVersion = 4;
+  const old = stored({
+    id: "old",
+    chapter: "12.5",
+    chapterUrl: "https://www.natomanga.com/manga/witch-and-mercenary/chapter-12-5?x=1#p3",
+    seriesUrl: "https://natomanga.com/manga/witch-and-mercenary",
+    latestChapterUrl: "http://www.natomanga.com/manga/witch-and-mercenary/chapter-20",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    dirty: false,
+  });
+  const other = stored({
+    id: "mangaread.org:x",
+    site: "mangaread.org",
+    chapterUrl: "https://www.mangaread.org/manga/x/chapter-1/",
+    seriesUrl: "https://www.mangaread.org/manga/x",
+  });
+  const plan = stored({ id: "plan", chapter: null, chapterUrl: null, status: "plan", seriesUrl: "https://www.natomanga.com/manga/p" });
+  data.series = { old: structuredClone(old), [other.id]: structuredClone(other), plan: structuredClone(plan) };
+
+  assert.deepEqual(await migrate(), { migrated: 2 });
+  const m = data.series.old;
+  assert.equal(m.chapterUrl, "https://www.manganami.com/manga/witch-and-mercenary/chapter-12-5?x=1#p3");
+  assert.equal(m.seriesUrl, "https://www.manganami.com/manga/witch-and-mercenary");
+  assert.equal(m.latestChapterUrl, "https://www.manganami.com/manga/witch-and-mercenary/chapter-20");
+  assert.equal(m.chapter, "12.5");
+  assert.equal(m.updatedAt, old.updatedAt); // not a user edit
+  assert.equal(m.dirty, false); // nothing to push
+  assert.equal(m.id, old.id); // the stable key never changes
+  assert.deepEqual(data.series[other.id], other);
+  assert.equal(data.series.plan.seriesUrl, "https://www.manganami.com/manga/p");
+  assert.equal(data.series.plan.chapterUrl, null);
+});
+
+test("a JSON backup with old NatoManga links restores them on manganami.com", async () => {
+  data.schemaVersion = 5;
+  const current = stored({ chapter: "3" });
+  data.series = { [current.id]: structuredClone(current) };
+
+  const result = await importRecords([
+    stored({
+      chapter: "3",
+      chapterUrl: "https://www.natomanga.com/manga/witch-and-mercenary/chapter-3",
+      seriesUrl: "https://www.natomanga.com/manga/witch-and-mercenary",
+    }),
+  ]);
+
+  assert.equal(result.updated, 0); // same series, same place: nothing changed
+  assert.equal(data.series[current.id].chapterUrl, current.chapterUrl);
+});
+
+test("an up-to-date schema leaves an import's unknown read time alone", async () => {
+  data.schemaVersion = 5;
   data.series = { a: stored({ id: "a", lastReadAt: null }) };
   assert.deepEqual(await migrate(), { migrated: 0 });
   assert.equal(data.series.a.lastReadAt, null);
@@ -548,7 +602,14 @@ test("bulk import never replaces a working chapter link with a missing or unsafe
   const existing = stored({ id: "a", chapter: "40" });
   data.series = { a: structuredClone(existing) };
 
-  for (const chapterUrl of [null, undefined, "", "javascript:alert(1)", "not a url"]) {
+  for (const chapterUrl of [
+    null,
+    undefined,
+    "",
+    "javascript:alert(1)",
+    "not a url",
+    "ftp://natomanga.com/manga/witch-and-mercenary/chapter-41", // old domain, wrong protocol
+  ]) {
     await bulkUpsert([stored({ id: "a", chapter: "41", chapterUrl })], { timestamp: T });
     assert.equal(data.series.a.chapter, "40", `chapterUrl ${String(chapterUrl)}`);
     assert.equal(data.series.a.chapterUrl, existing.chapterUrl);
