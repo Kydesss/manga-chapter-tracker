@@ -1,6 +1,7 @@
 -- Cloud schema v2 for public.series. See docs/cloud-schema-v2-plan.md.
--- Not applied automatically: apply together with the extension release that
--- sends client_schema = 2 (older builds can't push once this runs, by design).
+-- Applied to the live project on 2026-11-12 (version 20261112164419). Builds
+-- from before it can't push once it runs, by design: they don't send
+-- client_schema.
 
 begin;
 

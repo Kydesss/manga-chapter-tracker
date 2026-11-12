@@ -39,7 +39,7 @@ grows into a small cross-platform service.
 - **In progress:** cloud schema v2 (Sync hardening), on `feat/cloud-schema-v2`: Plan to
   read syncs, a server change order for the sync cursor, and a synced progress reset
   marker ([cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)). The migration is
-  written but not applied. Next in Bundle A: Settings and browser-bookmark import, on top of the full-page library
+  applied to the live project (2026-11-12); installs need this build to keep syncing. Next in Bundle A: Settings and browser-bookmark import, on top of the full-page library
   ([library-page-plan.md](./docs/library-page-plan.md)). Site bookmark import is paused
   with no site planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
@@ -269,9 +269,9 @@ found in later reviews.
   or Merge. See Invariant 5 in `docs/cloud-sync-design.md`.
 - **Cloud schema v2 (in progress, `feat/cloud-schema-v2`).** One migration for the four
   items marked *(schema v2)* below; see
-  [cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md). Written and reviewed in the
-  repo, not yet applied to the live project. Older installs stop pushing once it runs
-  (a hard cutover), so the migration and the extension release go out together.
+  [cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md). Applied to the live
+  project on 2026-11-12. Older installs can no longer push (a hard cutover) until they
+  load this build.
 - **Server change order for the sync cursor** *(schema v2)*. The incremental-pull cursor
   is built from `updated_at`, which devices set from their own clocks. One record stamped
   ahead of real time (a device with a fast clock) moves the cursor ahead, and later
@@ -284,6 +284,8 @@ found in later reviews.
   (furthest chapter wins), but other devices can see the lower chapter in between.
   Fix: a conditional write (an RPC that merges server-side, or an `updated_at` /
   `synced_at` precondition). Found in Codex review of cloud schema v2; predates it.
+- RLS policies call `auth.uid()` per row; Supabase's advisor suggests
+  `(select auth.uid())` so it's evaluated once per query. A small performance change.
 - Tombstone purge (hard-delete old soft-deletes).
 - Fuller multi-account handling beyond Keep separate: a way to see or export a parked
   library without signing in as its account, and to recover a library whose owner was

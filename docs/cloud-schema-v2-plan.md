@@ -5,8 +5,10 @@ tags:
 
 # Plan: cloud schema v2 (Plan to read, server change order, progress resets)
 
-Status: **in review.** The SQL is in `supabase/migrations/`, and it has **not** been
-applied to the live project. Applying it waits for the owner's go-ahead, after review.
+Status: **applied to the live project on 2026-11-12** as migration
+`20261112164419 series_schema_v2` (the file in `supabase/migrations/` carries the same
+version). Rehearsed first on local Postgres 17 (PGlite) and as a rolled-back dry run on
+the live project; see the PR #8 test plan.
 
 One cloud migration for four Sync hardening items on the roadmap. They're done
 together because each needs a column on `public.series`, and every migration is a
@@ -23,7 +25,8 @@ compatibility event for installs that haven't updated.
 
 Checked read-only on 2026-11-12: `public.series` matches the table in
 `docs/cloud-sync-design.md` exactly, with one applied migration
-(`20260617090334 create_series_table`) and 2 rows.
+(`20260617090334 create_series_table`). It holds 2,534 rows across 2 accounts (the
+table summary's "2 rows" was a stale estimate).
 
 ## 1. Plan to read in the cloud
 
@@ -53,7 +56,7 @@ with `clock_timestamp()` on every insert and update, whatever the client sent.
 
 - The cursor holds a server `synced_at` from now on. Storage schema v7 restarts a set
   cursor from the beginning, so the first pass after updating pulls everything once.
-  That's harmless (merges are idempotent) and small at this scale.
+  That's harmless (merges are idempotent): about 2,500 rows today, three pages.
 - **Overlap.** Server timestamps are taken when a row is written but become visible at
   commit, so a transaction can commit a row stamped just before a row already pulled.
   Each pull re-reads a 2-minute window behind the cursor. Rows read twice merge to the

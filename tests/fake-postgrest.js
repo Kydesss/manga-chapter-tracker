@@ -1,6 +1,6 @@
 // tests/fake-postgrest.js
 // A stand-in for PostgREST in front of public.series after cloud schema v2
-// (supabase/migrations/20261112120000_series_schema_v2.sql). It behaves like the
+// (supabase/migrations/20261112164419_series_schema_v2.sql). It behaves like the
 // real table where sync depends on it:
 //   - synced_at is assigned by the server on every write (microseconds, like
 //     clock_timestamp()), overwriting anything a client sends.

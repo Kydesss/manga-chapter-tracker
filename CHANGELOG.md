@@ -71,7 +71,8 @@ reference.
   anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
   replaces a working link or advances a series, and a new or restored series sent that
   way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
-- **Cloud schema v2** (needs the migration in `supabase/migrations/`, not yet applied;
+- **Cloud schema v2** (migration in `supabase/migrations/`, applied to the live project
+  on 2026-11-12;
   see [docs/cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)):
   - **Plan to read syncs** across devices. Chapter and link are nullable in the cloud
     and always travel together.
