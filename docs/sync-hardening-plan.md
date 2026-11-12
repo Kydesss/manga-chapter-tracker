@@ -1,7 +1,7 @@
 # Sync hardening (plan)
 
-Status: implemented and locally verified on `fix/sync-hardening` (2026-11-12).
-Production dry run and migration application are pending. Three items from the
+Status: built on `fix/sync-hardening` (PR #14); its migration was applied to the
+live project on 2026-11-12. Three items from the
 roadmap's Sync hardening list.
 
 ## 1. Saves from a page check what the page showed
@@ -104,5 +104,11 @@ Verified on 2026-11-12:
 - Code review corrected timestamp-only save checks, preservation of current cloud
   bases through page saves, and queued dialog close events after a quick reopen.
 
-Remaining release checks: rolled-back production rehearsal, owner approval before
-applying the migration, and a real two-device smoke test after deployment.
+Production: a rolled-back dry run of the committed migration passed every check
+(insert, update with the current base, stale base refused with the newer chapter
+kept, no base on an existing row refused, two-user isolation, anon denied, policies
+rewritten, microsecond `synced_at`). Applied with the owner's go-ahead on 2026-11-12
+as `20261112220336_push_series`; afterwards the function, grants, row-level security
+and all 2,534 rows checked out, and Supabase's performance advisor was clean.
+
+Remaining: a real two-device smoke test after the extension update.

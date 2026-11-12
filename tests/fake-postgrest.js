@@ -16,7 +16,7 @@
 //     already visible: a slow transaction, stamped when it wrote, committing
 //     after others.
 //   - pushSeries(rows) models rpc/push_series
-//     (supabase/migrations/20261112190000_push_series.sql): a row with
+//     (supabase/migrations/20261112220336_push_series.sql): a row with
 //     base_synced_at replaces the stored row only if its synced_at still equals
 //     the base; without a base (or with no stored row) it's inserted only if
 //     absent. Returns the accepted [{ id, synced_at }]. Every column is written.

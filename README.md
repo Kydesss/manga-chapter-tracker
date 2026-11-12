@@ -19,8 +19,8 @@ In the next update, each library row has **Set chapter**: enter a number or past
 the chapter's link. Shiori spells out a move back and sync keeps that choice.
 If the series or account changed while the popup or dialog was open, the save
 shows the current state and asks you to check again. Conditional cloud uploads
-also prevent stale devices overwriting newer cloud rows once the new migration
-is applied; until then, uploads use the existing behavior. See
+(the `push_series` database function) also stop a stale device overwriting a newer
+cloud row; it fetches, merges and retries instead. See
 [the sync hardening plan](./docs/sync-hardening-plan.md).
 
 ## About this project

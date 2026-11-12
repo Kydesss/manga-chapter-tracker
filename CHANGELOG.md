@@ -22,14 +22,16 @@ extension's `manifest.json` version field.
   edit time cannot silently overwrite further progress.
 - Uploads use the cloud version last seen by this device. Conflicting uploads are
   fetched, merged and retried up to three times; unresolved changes stay dirty.
-  Requires `20261112190000_push_series.sql`; before it is applied, uploads fall back
-  to the previous behavior. Older extension versions remain compatible.
+  Uses `push_series` (`20261112220336_push_series.sql`, applied 2026-11-12); a build
+  that can't find it falls back to the previous upload. Older extension versions keep
+  syncing unchanged (no cutover).
 - Set chapter retains keyboard focus when a dialog is quickly closed and reopened.
 
 ### Database
 - New `push_series` function uses invoker permissions and the authenticated user's
-  id. RLS policies evaluate `auth.uid()` once per query. The migration is rehearsed
-  locally; production dry run and application remain pending.
+  id. RLS policies evaluate `auth.uid()` once per query. Rehearsed on a local
+  Postgres (21 checks) and as a rolled-back dry run on production, then applied to the
+  live project on 2026-11-12.
 
 ## [0.5.0] - 2026-11-12
 

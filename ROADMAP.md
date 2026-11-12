@@ -36,9 +36,9 @@ grows into a small cross-platform service.
   (add any site by address and URL patterns,
   [custom-sites-plan.md](./docs/custom-sites-plan.md)), a save shortcut, popup Undo, and
   more chapter URLs. See the [changelog](./CHANGELOG.md).
-- **In review:** sync hardening (checked popup saves, Set chapter on the library page,
-  conditional uploads). Local implementation and checks are complete; production
-  migration validation and application are pending. See [the plan](./docs/sync-hardening-plan.md).
+- **In review (PR #14):** sync hardening (checked popup saves, Set chapter on the library
+  page, conditional uploads). Its migration, `push_series`, was applied to the live
+  project on 2026-11-12. See [the plan](./docs/sync-hardening-plan.md).
 - **Next:** save reminders (the rest
   of Bundle B) and the rest of Settings. Site bookmark import is paused with no site
   planned.
@@ -287,16 +287,17 @@ found in later reviews.
   changes from other devices are skipped until real time catches up. Fix: a
   server-assigned `synced_at` for the cursor, keeping `updated_at` for conflict
   resolution.
-- **Concurrent uploads (implemented, migration pending).** A push was an unconditional
+- **Concurrent uploads (done; migration applied 2026-11-12).** A push was an unconditional
   upsert, so if device A pulls chapter 40, device B pushes 50, and A's push of 41 lands
   last, the cloud holds 41 until B's next pass merges and pushes 50 again. It converges
   (furthest chapter wins), but other devices can see the lower chapter in between.
   `push_series` now checks the last observed `synced_at`, with client merge and retry
-  on conflict. Until the migration is applied, the client falls back to old uploads.
+  on conflict. A build that can't find the function falls back to the old upload, and
+  older installs keep using it, so the race remains only between older installs.
 - **Checked popup saves (implemented).** Save checks the library epoch and displayed
   sync content under the write lock. An account switch or changed series redraws
   instead of applying an old decision.
-- **RLS policy evaluation (migration pending).** The new migration uses
+- **RLS policy evaluation (done; migration applied 2026-11-12).** The migration uses
   `(select auth.uid())` so it is evaluated once per query.
 - Tombstone purge (hard-delete old soft-deletes).
 - Fuller multi-account handling beyond Keep separate: a way to see or export a parked
