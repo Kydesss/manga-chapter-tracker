@@ -7,6 +7,12 @@
     "permissions": ["storage", "activeTab", "unlimitedStorage", "identity"],
     "optional_permissions": ["bookmarks"],
     "host_permissions": ["https://fohkznuvisjohcuzelca.supabase.co/*"],
+  "commands": {
+    "save-chapter": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Save the chapter you're on"
+    }
+  },
   "options_ui": {
     "page": "library.html",
     "open_in_tab": true

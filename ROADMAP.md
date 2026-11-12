@@ -33,9 +33,9 @@ grows into a small cross-platform service.
   (2026-11-12): the full-page library, Plan to read (synced), browser-bookmark import,
   account isolation, and cloud schema v2 (server change order for the sync cursor, a
   synced progress reset marker). See the [changelog](./CHANGELOG.md).
-- **Next:** small fixes (popup Undo, a save shortcut, parser URL variants, the popup
-  footer's width), then Settings to finish Bundle A. Site bookmark import is paused with
-  no site planned.
+- **Next:** Settings, to finish Bundle A. The small fixes (popup Undo, a save shortcut,
+  parser URL variants, the popup footer's width) are on `polish/small-fixes`. Site
+  bookmark import is paused with no site planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
   chapters and series.
 - **Surfaces:** Chrome extension.
@@ -281,6 +281,10 @@ found in later reviews.
   (furthest chapter wins), but other devices can see the lower chapter in between.
   Fix: a conditional write (an RPC that merges server-side, or an `updated_at` /
   `synced_at` precondition). Found in Codex review of cloud schema v2; predates it.
+- The popup's Save doesn't check the library epoch: a save made from a popup drawn
+  before an account switch lands in the new account's library. The keyboard shortcut
+  decides and saves under the lock, and Remove/Undo check the epoch; Save should too.
+  Found in Codex review of the polish batch; predates it.
 - RLS policies call `auth.uid()` per row; Supabase's advisor suggests
   `(select auth.uid())` so it's evaluated once per query. A small performance change.
 - Tombstone purge (hard-delete old soft-deletes).
@@ -314,9 +318,10 @@ found in later reviews.
 
 ## Polish backlog (small, pick up anytime)
 
-- Keyboard shortcut to save the current chapter.
-- Parser robustness for URL variants (query strings, `#anchors`, `/chapter-100/2`, `vol-2-chapter-5`).
-- Undo for the popup's Remove (the library page has it; `restore()` makes it a small change).
+- ~~Keyboard shortcut to save the current chapter.~~ Done (Alt+Shift+S).
+- ~~Parser robustness for URL variants.~~ Done: page suffixes and volume prefixes; query
+  strings and anchors already worked.
+- ~~Undo for the popup's Remove.~~ Done.
 - Chapter labels that can't be ranked numerically ("Extra", "Omake"), which reach storage
   through import or another client. v0.3.3 stops the save area claiming a direction for
   them, but the furthest-chapter merge rule still can't order them either: needs a real

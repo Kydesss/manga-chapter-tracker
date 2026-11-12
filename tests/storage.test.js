@@ -10,11 +10,13 @@ import {
   migrate,
   remove,
   restore,
+  saveIfAllowed,
   updateMap,
   upsert,
 } from "../storage.js";
 import { parseChapterUrl, parseSeriesUrl } from "../parser.js";
 import { resolveConflict } from "../merge.js";
+import { shortcutSaveDecision } from "../view.js";
 
 let data;
 
@@ -1172,4 +1174,42 @@ test("a backup with an unreadable timestamp imports it as unknown", async () => 
   // Treated like a missing read time: shown as the usual estimate, never stored as "unknown".
   assert.equal(r.lastReadAt, r.updatedAt);
   assert.equal(r.progressResetAt, null);
+});
+
+test("the shortcut decides against the series as it is when it writes, so a save in between isn't overwritten", async () => {
+  // Codex review: the shortcut checked chapter 40, approved 41, and another
+  // save wrote 90 before its write.
+  const { get, set } = chrome.storage.local;
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+  chrome.storage.local.get = async (key) => {
+    await pause();
+    return get(key);
+  };
+  chrome.storage.local.set = async (values) => {
+    await pause();
+    return set(values);
+  };
+  data.schemaVersion = 7;
+  const id = stored().id;
+  data.series = { [id]: stored({ chapter: "40", chapterUrl: "https://x.test/40" }) };
+  const at = "2026-11-12T12:00:00.000Z";
+  // Whichever gets the lock first, chapter 90 must survive: either the
+  // shortcut sees it and declines, or it saves 41 first and 90 lands after.
+  await Promise.all([
+    saveIfAllowed({ ...stored(), chapter: "41", chapterUrl: "https://x.test/41", updatedAt: at }, shortcutSaveDecision),
+    upsert({ ...stored(), chapter: "90", chapterUrl: "https://x.test/90", updatedAt: at }),
+  ]);
+  assert.equal(data.series[id].chapter, "90");
+});
+
+test("saveIfAllowed only writes when the decision is save", async () => {
+  data.schemaVersion = 7;
+  data.series = {};
+  const before = structuredClone(data);
+  const r = await saveIfAllowed({ ...stored(), updatedAt: "2026-11-12T12:00:00.000Z" }, () => ({ action: "unsupported" }));
+  assert.equal(r.action, "unsupported");
+  assert.deepEqual(data, before);
+  const ok = await saveIfAllowed({ ...stored(), updatedAt: "2026-11-12T12:00:00.000Z" }, () => ({ action: "save" }));
+  assert.equal(ok.saved.chapter, "3");
+  assert.equal(data.series[stored().id].dirty, true);
 });

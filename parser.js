@@ -29,7 +29,15 @@ const SITES = [
 //   /manga/{slug}/chapter-{number}
 // The number can be a decimal expressed with a dash or dot, e.g. "83-2" or
 // "520-5" (meaning 83.2 / 520.5), so we must NOT assume an integer.
-const CHAPTER_RE = /\/manga\/([^/]+)\/chapter-([0-9]+(?:[-.][0-9]+)?)\/?$/i;
+// Also accepted (the link is saved as-is, so Continue returns to the page):
+//   - a volume prefix, /manga/{slug}/vol-2-chapter-5. The chapter number is
+//     the label; the volume isn't part of it, so a site that restarts chapter
+//     numbers each volume would rank them wrongly (neither site does today).
+//   - a page number after the chapter, /manga/{slug}/chapter-100/2. Only a
+//     number, so a different page under a chapter (comments, say) isn't
+//     mistaken for reading it.
+// Query strings and #anchors never reach this: it matches the URL's path.
+const CHAPTER_RE = /\/manga\/([^/]+)\/(?:vol(?:ume)?-[0-9]+-)?chapter-([0-9]+(?:[-.][0-9]+)?)(?:\/[0-9]+)?\/?$/i;
 
 // A series page is the chapter URL minus the chapter: /manga/{slug}, with or
 // without a trailing slash (MangaRead adds one). Anchored at the start so a

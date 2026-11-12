@@ -159,3 +159,25 @@ export function escapeHtml(str) {
     "'": "&#39;",
   }[c]));
 }
+
+// What the "save the chapter you're on" keyboard shortcut does with a page,
+// given what's saved for that series. It mirrors the popup's save button,
+// except that it never moves a series back: the popup warns and asks first
+// for that, and a shortcut has no way to ask.
+//   pending  - parsePageUrl's record for the tab, or null (not a supported page)
+//   existing - the saved series (getOne: null if not saved or removed)
+// Returns { action }: "save", "moves-back", "already-reading" (a series page
+// for a series you're reading), "already-planned", or "unsupported".
+export function shortcutSaveDecision(pending, existing) {
+  if (!pending) return { action: "unsupported" };
+  if (pending.chapter == null) {
+    if (existing && existing.chapter != null) return { action: "already-reading" };
+    if (existing) return { action: "already-planned" };
+    return { action: "save" };
+  }
+  // NaN (labels that can't be ranked) saves, as the popup's button does.
+  if (existing && existing.chapter != null && compareChapters(pending.chapter, existing.chapter) < 0) {
+    return { action: "moves-back" };
+  }
+  return { action: "save" };
+}

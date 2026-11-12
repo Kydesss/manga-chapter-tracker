@@ -10,6 +10,41 @@ extension's `manifest.json` version field.
 
 ## [Unreleased]
 
+### Added
+- **Undo for the popup's Remove.** Removing a series shows **Undo** in the popup's
+  message, as the library page does. It stays until used, dismissed (×), replaced, or
+  the popup closes. Undo brings the series back at the furthest chapter it knew, and is
+  refused if the library switched accounts in the meantime. Removing with the keyboard
+  moves focus to Undo.
+- **Keyboard shortcut to save the chapter you're on**: Alt+Shift+S by default (change it
+  at `chrome://extensions/shortcuts`). It saves like the popup's button, plans a series
+  page, and reports on the toolbar icon (a badge and tooltip). It never moves a series
+  back: on an earlier chapter it says so and leaves the save to the popup, which asks
+  first. Its check and its save happen in one locked step (`storage.saveIfAllowed`), so
+  a save landing in between can't be overwritten.
+- **The popup follows changes made elsewhere** (the shortcut, the library page, a sync)
+  while it's open.
+- **"Go to your saved page"**: on a different page of the chapter you saved
+  (`/chapter-100/2` open, `/chapter-100/12` saved), the popup offers the jump back.
+
+### Changed
+- **More chapter URLs are recognized**: a page number after the chapter
+  (`/chapter-100/2`) and a volume prefix (`vol-2-chapter-5`, `volume-3-chapter-12-5`).
+  The saved link keeps the page, so Continue returns to it. Query strings and anchors
+  already worked and are now covered by tests.
+- **Replacing a message whose Undo had focus** moves focus to the search box instead of
+  losing it (popup and library page).
+
+### Fixed
+- **Removing from the popup with the keyboard opened the series instead.** Enter or
+  Space on a row's × bubbled up to the row's own handler, which cancelled the press and
+  opened the series. The row now only handles keys aimed at it.
+- **A long email made the popup 1px too wide**, adding a horizontal scrollbar. The
+  footer's sign-in side now gives way: "Synced: …" truncates, with the full text in its
+  tooltip.
+- Tests: 177 → 194 (parser URL variants, the shortcut's decisions, and the service
+  worker's shortcut handler against a fake `chrome`).
+
 ## [0.4.0] - 2026-11-12
 
 The management release (Bundle A, minus Settings) and a round of sync hardening. Shiori

@@ -304,12 +304,61 @@ h1 {
   left: 12px;
   right: 12px;
   bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   background: var(--accent);
   color: var(--accent-text);
   text-align: center;
   padding: 8px;
   border-radius: var(--radius-sm);
   font-size: var(--text-sm);
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+.toast-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toast-action,
+.toast-dismiss {
+  flex: 0 0 auto;
+  font: inherit;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+}
+
+.toast-action {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.toast-dismiss {
+  font-size: var(--text-lg);
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.toast-action:focus-visible,
+.toast-dismiss:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+}
+
+.toast-action[hidden],
+.toast-dismiss[hidden] {
+  display: none;
 }
 
 /* Save-area states: a small line showing what's already saved for this series. */
@@ -350,7 +399,22 @@ h1 {
   gap: 12px;
 }
 
+/* The sign-in side gives way to Export / Import: a long "Synced: email"
+   truncates (full text in its tooltip) instead of widening the popup. */
+.auth-area {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.footer-actions,
+.auth-area .sync-dot,
+.auth-area .link-btn {
+  flex: 0 0 auto;
+}
+
 .auth-status {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: var(--text-xs);
   color: var(--muted);
   max-width: 140px;
