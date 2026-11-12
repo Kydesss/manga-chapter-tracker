@@ -7,6 +7,11 @@ tags:
 
 # Plan: NatoManga Bookmark Import and Library Expansion
 
+> **Status: removed before release (2026-11-11).** The importer this plan describes was
+> built on the `autoscraper` branch and then removed. This document is kept as a record
+> and as a starting point if site import comes back. The code is in git history before
+> the "Remove the scraper for Natomanga" commit.
+
 > **Status (2026-09-23):** Phases 1-3 are built on the `autoscraper` branch and were
 > reviewed before merge. The review's four blockers and follow-up bugs are fixed
 > ([Review before merge](#review-before-merge-2026-09-23), at the end). Phase 4 (covers)

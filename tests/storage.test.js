@@ -2,7 +2,6 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  bulkUpsert,
   getAll,
   importRecords,
   markSynced,
@@ -120,148 +119,6 @@ test("saving a chapter preserves previously collected series metadata", async ()
   assert.equal(saved.dirty, true);
 });
 
-test("bulk import adds unread records and never moves progress backward", async () => {
-  data.schemaVersion = 3;
-  data.series = {
-    "natomanga.com:existing": {
-      id: "natomanga.com:existing",
-      site: "natomanga.com",
-      siteName: "NatoManga",
-      slug: "existing",
-      title: "Existing",
-      seriesUrl: "https://www.natomanga.com/manga/existing",
-      status: "reading",
-      chapter: "20",
-      chapterUrl: "https://www.natomanga.com/manga/existing/chapter-20",
-      lastReadAt: "2026-09-01T00:00:00.000Z",
-      updatedAt: "2026-09-01T00:00:00.000Z",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      deleted: false,
-      dirty: false,
-    },
-  };
-
-  const result = await bulkUpsert(
-    [
-      {
-        id: "natomanga.com:existing",
-        site: "natomanga.com",
-        siteName: "NatoManga",
-        slug: "existing",
-        title: "Existing (Official Title)",
-        seriesUrl: "https://www.natomanga.com/manga/existing",
-        status: "reading",
-        chapter: "18",
-        chapterUrl: "https://www.natomanga.com/manga/existing/chapter-18",
-      },
-      {
-        id: "natomanga.com:unread",
-        site: "natomanga.com",
-        siteName: "NatoManga",
-        slug: "unread",
-        title: "Unread",
-        seriesUrl: "https://www.natomanga.com/manga/unread",
-        status: "plan",
-        chapter: null,
-        chapterUrl: null,
-      },
-    ],
-    { timestamp: "2026-09-22T12:00:00.000Z" }
-  );
-
-  assert.deepEqual(result, {
-    added: 1,
-    advanced: 0,
-    enriched: 1,
-    unchanged: 0,
-    skipped: 0,
-    processed: 2,
-    total: 2,
-  });
-  assert.equal(data.series["natomanga.com:existing"].chapter, "20");
-  assert.match(data.series["natomanga.com:existing"].chapterUrl, /chapter-20$/);
-  assert.equal(data.series["natomanga.com:existing"].title, "Existing (Official Title)");
-  assert.equal(data.series["natomanga.com:unread"].status, "plan");
-  assert.equal(data.series["natomanga.com:unread"].chapter, null);
-});
-
-test("bulk import deduplicates and keeps the furthest imported chapter", async () => {
-  data.schemaVersion = 3;
-  data.series = {};
-  const base = {
-    id: "natomanga.com:duplicate",
-    site: "natomanga.com",
-    siteName: "NatoManga",
-    slug: "duplicate",
-    title: "Duplicate",
-    seriesUrl: "https://www.natomanga.com/manga/duplicate",
-    status: "reading",
-  };
-
-  const result = await bulkUpsert(
-    [
-      { ...base, chapter: "8", chapterUrl: `${base.seriesUrl}/chapter-8` },
-      { ...base, chapter: "10", chapterUrl: `${base.seriesUrl}/chapter-10` },
-    ],
-    { timestamp: "2026-09-22T12:00:00.000Z" }
-  );
-
-  assert.equal(result.processed, 1);
-  assert.equal(result.added, 1);
-  assert.equal(data.series[base.id].chapter, "10");
-  assert.equal(data.series[base.id].lastReadAt, null); // read time unknown
-});
-
-test("bulk import advances an existing series to the latest viewed chapter", async () => {
-  data.schemaVersion = 3;
-  data.series = {
-    "natomanga.com:advance-me": {
-      id: "natomanga.com:advance-me",
-      site: "natomanga.com",
-      siteName: "NatoManga",
-      slug: "advance-me",
-      title: "Advance Me",
-      seriesUrl: "https://www.natomanga.com/manga/advance-me",
-      status: "reading",
-      chapter: "20",
-      chapterUrl: "https://www.natomanga.com/manga/advance-me/chapter-20",
-      lastReadAt: "2026-08-01T00:00:00.000Z",
-      updatedAt: "2026-08-01T00:00:00.000Z",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      deleted: false,
-      dirty: false,
-    },
-  };
-
-  const result = await bulkUpsert(
-    [
-      {
-        id: "natomanga.com:advance-me",
-        site: "natomanga.com",
-        siteName: "NatoManga",
-        slug: "advance-me",
-        title: "Advance Me",
-        seriesUrl: "https://www.natomanga.com/manga/advance-me",
-        status: "reading",
-        chapter: "22.5",
-        chapterUrl: "https://www.natomanga.com/manga/advance-me/chapter-22-5",
-      },
-    ],
-    { timestamp: "2026-09-22T12:00:00.000Z" }
-  );
-
-  assert.equal(result.advanced, 1);
-  assert.equal(data.series["natomanga.com:advance-me"].chapter, "22.5");
-  assert.match(data.series["natomanga.com:advance-me"].chapterUrl, /chapter-22-5$/);
-  // The site didn't say when 22.5 was read, so the last known read time stays
-  // rather than the import time making the series look freshly read.
-  assert.equal(
-    data.series["natomanga.com:advance-me"].lastReadAt,
-    "2026-08-01T00:00:00.000Z"
-  );
-});
-
-// A complete schema v4 record; `over` replaces any field.
 function stored(over = {}) {
   return {
     id: "natomanga.com:witch-and-mercenary",
@@ -437,7 +294,7 @@ test("concurrent writes don't overwrite each other", async () => {
 
   await Promise.all([
     upsert(stored({ id: "saved" })),
-    bulkUpsert([stored({ id: "imported" })], { timestamp: "2026-09-23T00:00:00.000Z" }),
+    importRecords([stored({ id: "imported" })]),
     updateMap((map) => ({ ...map, synced: stored({ id: "synced" }) })),
   ]);
 
@@ -458,52 +315,4 @@ test("markSynced keeps a record dirty if it changed while being pushed", async (
 
   assert.equal(data.series.a.dirty, true);
   assert.equal(data.series.b.dirty, false);
-});
-
-test("metadata refresh stores covers and updates without creating a cloud-dirty change", async () => {
-  data.schemaVersion = 3;
-  data.series = {
-    "natomanga.com:metadata": {
-      id: "natomanga.com:metadata",
-      site: "natomanga.com",
-      siteName: "NatoManga",
-      slug: "metadata",
-      title: "Metadata",
-      seriesUrl: "https://www.natomanga.com/manga/metadata",
-      status: "reading",
-      chapter: "8",
-      chapterUrl: "https://www.natomanga.com/manga/metadata/chapter-8",
-      lastReadAt: "2026-08-01T00:00:00.000Z",
-      coverUrl: null,
-      latestChapter: null,
-      latestChapterUrl: null,
-      latestPublishedAt: null,
-      metadataCheckedAt: null,
-      updatedAt: "2026-08-01T00:00:00.000Z",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      deleted: false,
-      dirty: false,
-    },
-  };
-
-  const result = await bulkUpsert(
-    [
-      {
-        ...data.series["natomanga.com:metadata"],
-        coverUrl: "https://cdn.example/metadata.jpg",
-        latestChapter: "10",
-        latestChapterUrl: "https://www.natomanga.com/manga/metadata/chapter-10",
-        latestPublishedAt: "2026-09-22T10:00:00.000Z",
-        metadataCheckedAt: "2026-09-23T12:00:00.000Z",
-      },
-    ],
-    { timestamp: "2026-09-23T12:00:00.000Z" }
-  );
-
-  const stored = data.series["natomanga.com:metadata"];
-  assert.equal(result.enriched, 1);
-  assert.equal(stored.coverUrl, "https://cdn.example/metadata.jpg");
-  assert.equal(stored.latestChapter, "10");
-  assert.equal(stored.dirty, false);
-  assert.equal(stored.updatedAt, "2026-08-01T00:00:00.000Z");
 });

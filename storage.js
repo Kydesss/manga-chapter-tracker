@@ -190,96 +190,6 @@ export async function upsert(record) {
   });
 }
 
-// Merge many imported records with a single read and write. Reading position
-// is monotonic: a bulk import may advance a series, but never move it backward.
-// Null metadata from a scraper never erases metadata we already know.
-export async function bulkUpsert(records, { timestamp = nowISO() } = {}) {
-  if (!Array.isArray(records)) {
-    throw new Error("Bulk import data must be an array of series records.");
-  }
-
-  return withLibraryLock(async () => {
-    const map = await readMap();
-    const deduped = new Map();
-    let skipped = 0;
-
-    for (const record of records) {
-      if (!isImportableRecord(record)) {
-        skipped++;
-        continue;
-      }
-      const previous = deduped.get(record.id);
-      deduped.set(record.id, previous ? preferFurtherRecord(previous, record) : record);
-    }
-
-    let added = 0;
-    let advanced = 0;
-    let enriched = 0;
-    let unchanged = 0;
-
-    for (const incoming of deduped.values()) {
-      const existing = map[incoming.id];
-      if (!existing || existing.deleted) {
-        map[incoming.id] = normalizeImportedRecord(incoming, timestamp, existing?.createdAt);
-        added++;
-        continue;
-      }
-
-      const comparison = compareChapterProgress(incoming.chapter, existing.chapter);
-      const shouldAdvance =
-        incoming.chapter != null &&
-        (existing.chapter == null || comparison > 0);
-
-      const merged = {
-        ...SERIES_DEFAULTS,
-        ...existing,
-        site: incoming.site,
-        siteName: incoming.siteName || existing.siteName,
-        slug: incoming.slug,
-        title: pickTitle(incoming, existing),
-        seriesUrl: incoming.seriesUrl || existing.seriesUrl,
-        ...keepKnownMetadata(incoming, existing),
-        deleted: false,
-      };
-
-      if (shouldAdvance) {
-        merged.status = "reading";
-        merged.chapter = incoming.chapter;
-        merged.chapterUrl = incoming.chapterUrl;
-        // Sites rarely say when a chapter was read. Keep the last known read
-        // time instead of stamping the import time, which would make every
-        // imported series look freshly read.
-        if (incoming.lastReadAt) merged.lastReadAt = incoming.lastReadAt;
-      }
-
-      if (sameImportContent(existing, merged)) {
-        unchanged++;
-        continue;
-      }
-
-      // Covers and latest chapters stay local for now, so a metadata-only
-      // change neither bumps updatedAt nor queues a sync.
-      const syncRelevantChange = !sameImportSyncContent(existing, merged);
-      merged.updatedAt = syncRelevantChange ? timestamp : existing.updatedAt;
-      merged.dirty = syncRelevantChange ? true : existing.dirty === true;
-      map[incoming.id] = merged;
-      if (shouldAdvance) advanced++;
-      else enriched++;
-    }
-
-    await writeMap(map);
-    return {
-      added,
-      advanced,
-      enriched,
-      unchanged,
-      skipped,
-      processed: deduped.size,
-      total: Object.values(map).filter((r) => !r.deleted).length,
-    };
-  });
-}
-
 function isImportableRecord(record) {
   return (
     record &&
@@ -290,38 +200,6 @@ function isImportableRecord(record) {
     typeof record.seriesUrl === "string" &&
     (record.chapter === null || record.chapter === undefined || typeof record.chapter === "string")
   );
-}
-
-function normalizeImportedRecord(record, timestamp, existingCreatedAt) {
-  return {
-    ...SERIES_DEFAULTS,
-    ...record,
-    status: record.chapter == null ? "plan" : "reading",
-    chapter: record.chapter ?? null,
-    chapterUrl: record.chapterUrl ?? null,
-    // Unknown unless the site reported it: an import is not a read.
-    lastReadAt: record.chapter == null ? null : record.lastReadAt ?? null,
-    createdAt: existingCreatedAt || record.createdAt || timestamp,
-    updatedAt: timestamp,
-    deleted: false,
-    dirty: true,
-  };
-}
-
-function preferFurtherRecord(a, b) {
-  const comparison = compareChapterProgress(b.chapter, a.chapter);
-  if (comparison > 0 || (a.chapter == null && b.chapter != null)) return b;
-  return a;
-}
-
-function compareChapterProgress(a, b) {
-  if (a == null && b == null) return 0;
-  if (a == null) return -1;
-  if (b == null) return 1;
-  const an = Number.parseFloat(a);
-  const bn = Number.parseFloat(b);
-  if (Number.isNaN(an) || Number.isNaN(bn)) return a === b ? 0 : -1;
-  return Math.sign(an - bn);
 }
 
 const IMPORT_CONTENT_FIELDS = [
@@ -344,22 +222,6 @@ const IMPORT_CONTENT_FIELDS = [
 
 function sameImportContent(a, b) {
   return IMPORT_CONTENT_FIELDS.every((field) => (a[field] ?? null) === (b[field] ?? null));
-}
-
-// The subset of fields the cloud stores (see sync.js toRow), plus status.
-const IMPORT_SYNC_FIELDS = [
-  "site",
-  "slug",
-  "title",
-  "seriesUrl",
-  "status",
-  "chapter",
-  "chapterUrl",
-  "deleted",
-];
-
-function sameImportSyncContent(a, b) {
-  return IMPORT_SYNC_FIELDS.every((field) => (a[field] ?? null) === (b[field] ?? null));
 }
 
 // Soft delete: tombstone the record so the deletion can sync. The UI filters

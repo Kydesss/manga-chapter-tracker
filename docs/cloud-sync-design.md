@@ -290,9 +290,11 @@ Plan-to-read record has `chapter: null` and `chapterUrl: null`.
   other devices.
 - The metadata fields survive conflict resolution (the local value is preferred) but are
   never uploaded. `fromRow` sets them to `null` and sets `lastReadAt` to `updated_at`.
-- A change to metadata alone, such as a new cover or latest chapter from
-  **Refresh updates**, doesn't bump `updatedAt` or set `dirty`. Refreshing a large
-  library therefore doesn't cause a wave of pushes.
+- A change to metadata alone, such as a new cover or latest chapter from the
+  NatoManga importer's **Refresh updates**, didn't bump `updatedAt` or set `dirty`, so
+  refreshing a large library didn't cause a wave of pushes. That importer was removed
+  before release (2026-11-11), and nothing writes the metadata fields now. A future
+  metadata source should keep this rule.
 
 **Conflict rule extension (required).** The rule "if a label cannot be parsed, fall back
 to `updatedAt`" was meant for bad data. It must not apply to a *missing* chapter.
