@@ -67,6 +67,11 @@ npm test
 Please run this before pushing, and add tests when you change the parser, storage, or
 merge logic.
 
+For the Set chapter dialog and stale popup saves, run `node scripts/check-sync-ui.mjs`.
+It starts headless Chrome in a temporary profile, serves local files, and mocks
+extension APIs. It does not use your installed extension or browser data. Set
+`CHROME_PATH` if Chrome is elsewhere.
+
 ## Project layout
 
 - `manifest.json` - extension config (MV3).

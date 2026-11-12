@@ -8,7 +8,7 @@ import { parsePageUrl, hostOf, siteCovers } from "./parser.js";
 import { getSites, siteNames } from "./sites.js";
 import { onCustomSitesChanged } from "./settings.js";
 import { PENDING_SITE_ADD_KEY } from "./view.js";
-import { migrate, getAll, getLibrary, getOne, upsert, remove, restore, importRecords, OWNER_KEY } from "./storage.js";
+import { migrate, getAll, getLibrary, getOneWithEpoch, saveChecked, remove, restore, importRecords, OWNER_KEY } from "./storage.js";
 import { getSession, getUserEmail, signOut, SESSION_KEY } from "./auth.js";
 import { syncNow, resolveAccount } from "./sync.js";
 import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml, siteLabel, createResultGate } from "./view.js";
@@ -76,9 +76,12 @@ let pending = null; // parsed record for the current tab, or null
 let siteNameMap = {}; // { siteId: name } for every site Shiori knows (sites.js)
 let pendingTabId = null; // the tab `pending` came from, so we can navigate it
 // The save area warned that saving moves the series back. Clicking Save after
-// that warning is a deliberate move back, which sync must keep (storage.upsert
+// that warning is a deliberate move back, which sync must keep (storage.saveChecked
 // `resetProgress`), not undo with the furthest chapter.
 let pendingMovesBack = false;
+// What the save area was drawn from: the library and the series' version. The
+// save only goes ahead if both still hold (storage.saveChecked).
+let pendingSeen = { epoch: undefined, updatedAt: null };
 let allRecords = []; // every saved series (source of truth in memory)
 let libraryEpoch; // which library allRecords came from (storage.js getLibrary)
 let filtered = []; // current search/sort view, the array we virtualize
@@ -141,7 +144,8 @@ async function refreshSaveArea() {
 
   // Is this series already tracked? Show the relationship so a save is never
   // a surprise overwrite.
-  const existing = await getOne(pending.id);
+  const { record: existing, epoch: pendingEpoch } = await getOneWithEpoch(pending.id);
+  pendingSeen = { epoch: pendingEpoch, updatedAt: existing?.updatedAt ?? null, record: existing };
   pendingMovesBack = false;
 
   if (pending.chapter == null) {
@@ -246,10 +250,23 @@ function refreshSeriesSaveArea(existing) {
 
 saveBtn.addEventListener("click", async () => {
   if (!pending) return;
-  const saved = await upsert(
+  const result = await saveChecked(
     { ...pending, updatedAt: new Date().toISOString() },
-    { resetProgress: pendingMovesBack }
+    { resetProgress: pendingMovesBack, epoch: pendingSeen.epoch, seenUpdatedAt: pendingSeen.updatedAt, seenRecord: pendingSeen.record }
   );
+  if (result.stale) {
+    // What this popup showed is out of date: redraw from what's there now and
+    // let the user decide again, rather than save a stale decision.
+    showToast(
+      result.stale === "library"
+        ? "Your library switched accounts, so nothing was saved"
+        : "This series changed while the popup was open. Check and save again."
+    );
+    await load();
+    await refreshSaveArea();
+    return;
+  }
+  const { saved } = result;
   showToast(
     saved.chapter == null
       ? `Added ${saved.title} to Plan to read`

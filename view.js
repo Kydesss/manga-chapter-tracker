@@ -3,6 +3,8 @@
 // sorting, summary counts, and small display helpers. No chrome.*, no DOM
 // state, so it's unit-tested directly (tests/view.test.js).
 
+import { parseChapterUrl, chapterNumberLabel, chapterLinkFor } from "./parser.js";
+
 // Stored records are partly untrusted: a JSON import only validates the
 // required fields, so optional ones (siteName, createdAt, lastReadAt) can be
 // any type. These helpers treat a non-string as missing instead of throwing,
@@ -17,6 +19,49 @@ const isoOrEmpty = (v) => (typeof v === "string" && !Number.isNaN(Date.parse(v))
 // r.siteName directly; it may be any type.
 export function siteLabel(record, names = null) {
   return text(names?.[record?.site]) || text(record?.siteName) || text(record?.site);
+}
+
+// --- Set chapter (library page) ---------------------------------------------
+
+// What the Set chapter dialog would save for `input` (a chapter number like
+// "45" or "45.5", or a pasted chapter link) on saved series `record`, given
+// the sites Shiori knows. Returns:
+//   { ok: true, chapter, chapterUrl, direction, movesBack }
+//     direction: "forward" | "back" | "same" | "start" (from Plan to read) |
+//                "unknown" (the saved chapter isn't a number)
+//     movesBack: true when the save must set the reset marker (back, unknown)
+//   { ok: false, error, needLink } (needLink: a number was fine, but the
+//     site's link can't be built, so ask for the chapter's link)
+// See docs/sync-hardening-plan.md.
+export function resolveChapterInput(input, record, sites) {
+  const raw = typeof input === "string" ? input.trim() : "";
+  if (!raw) return { ok: false, error: "" };
+  let chapter;
+  let chapterUrl;
+  if (/^https?:\/\//i.test(raw)) {
+    const parsed = parseChapterUrl(raw, sites);
+    if (!parsed) return { ok: false, error: "That link isn't a chapter page Shiori recognizes." };
+    if (parsed.id !== record.id) return { ok: false, error: "That link is for a different series." };
+    ({ chapter, chapterUrl } = parsed);
+  } else {
+    chapter = chapterNumberLabel(raw);
+    if (!chapter) return { ok: false, error: "Enter a chapter number, like 45 or 45.5, or paste the chapter's link." };
+    chapterUrl = chapterLinkFor(record, chapter, sites);
+    if (!chapterUrl) {
+      return {
+        ok: false,
+        needLink: true,
+        error: `Shiori can't build the link for chapter ${chapter} on this site. Paste the chapter's link instead.`,
+      };
+    }
+  }
+  let direction;
+  if (isPlan(record)) direction = "start";
+  else {
+    const cmp = compareChapters(chapter, record.chapter);
+    direction = Number.isNaN(cmp) ? "unknown" : cmp > 0 ? "forward" : cmp < 0 ? "back" : "same";
+  }
+  return { ok: true, chapter, chapterUrl, direction, movesBack: direction === "back" || direction === "unknown" };
 }
 
 // Where the popup leaves an "Add this site" request ({ host, url, at }) for the

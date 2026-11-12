@@ -113,7 +113,15 @@ beforeEach(() => {
       }
       return response(200, fake.select(cloud, url));
     }
-    const rows = JSON.parse(opts.body);
+    const body = JSON.parse(opts.body);
+    if (new URL(url).pathname.endsWith("/rpc/push_series")) {
+      // push_series writes as auth.uid(): the token's account, never one the
+      // client names.
+      posts.push({ user, rows: body.rows.map((r) => ({ ...r, user_id: user })) });
+      const out = fake.pushSeries(cloud, body.rows, { userId: user });
+      return out.error ? response(400, out.error) : response(200, out.accepted);
+    }
+    const rows = body;
     posts.push({ user, rows });
     if (rows.some((r) => r.user_id !== user)) return response(403, "RLS");
     const error = fake.upsert(cloud, rows);

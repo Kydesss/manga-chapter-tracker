@@ -37,6 +37,7 @@ function row(over = {}) {
 }
 
 beforeEach(() => {
+  globalThis.__noPushRpc = false;
   const r = row();
   cloud = new Map([[ID, r]]);
   fake = createFakeSeries();
@@ -100,6 +101,11 @@ beforeEach(() => {
       postStarted?.();
       await gate;
     }
+    if (u.pathname.endsWith("/rpc/push_series")) {
+      if (globalThis.__noPushRpc) return response(404, { code: "PGRST202", message: "Could not find the function public.push_series(rows)" });
+      const out = fake.pushSeries(cloud, batch.rows);
+      return out.error ? response(400, out.error) : response(200, out.accepted);
+    }
     const error = fake.upsert(cloud, batch);
     return error ? response(400, error) : response(201, null);
   };
@@ -108,6 +114,98 @@ beforeEach(() => {
 // Fresh module instances: separate engines, like separate extension pages.
 let n = 0;
 const engine = () => import(`../sync.js?engine=${n++}`);
+
+test("a device cannot overwrite a chapter uploaded after its pull", async () => {
+  const library = await engine();
+  data.series[ID] = { ...data.series[ID], chapter: "41", chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-41", dirty: true };
+  const originalFetch = globalThis.fetch;
+  let raced = false;
+  let rejected = false;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (new URL(url).pathname.endsWith("/rpc/push_series") && !raced) {
+      raced = true;
+      fake.upsert(cloud, [row({ chapter: "50", chapter_url: "https://www.manganami.com/manga/witch-and-mercenary/chapter-50", client_schema: 2 })]);
+      const res = await originalFetch(url, opts);
+      rejected = (await res.json()).length === 0;
+      assert.equal(cloud.get(ID).chapter, "50", "the refused push must leave the cloud untouched");
+      return response(200, []);
+    }
+    return originalFetch(url, opts);
+  };
+  assert.equal((await library.syncNow()).ok, true);
+  assert.equal(rejected, true);
+  assert.equal(data.series[ID].chapter, "50");
+  assert.equal(data.series[ID].dirty, false);
+  assert.equal(data.series[ID].cloudSyncedAt, cloud.get(ID).synced_at);
+});
+
+test("first sync merges existing cloud progress before any upload", async () => {
+  const library = await engine();
+  delete data.lastSyncCursor;
+  data.series[ID] = { ...data.series[ID], chapter: "41", dirty: true };
+  cloud.set(ID, row({ chapter: "50", chapter_url: "https://www.manganami.com/manga/witch-and-mercenary/chapter-50", client_schema: 2 }));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (opts.method === "POST") {
+      const body = JSON.parse(opts.body);
+      for (const r of body.rows ?? body) assert.equal(r.chapter, "50");
+    }
+    return originalFetch(url, opts);
+  };
+  assert.equal((await library.syncNow()).ok, true);
+  assert.equal(cloud.get(ID).chapter, "50");
+  assert.equal(data.series[ID].chapter, "50");
+});
+
+test("a cloud base outside the cursor is fetched by id and retried", async () => {
+  const library = await engine();
+  await library.syncNow();
+  data.lastSyncCursor = "2099-01-01T00:00:00.000000+00:00";
+  data.series[ID] = { ...data.series[ID], chapter: "60", chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-60", cloudSyncedAt: "2000-01-01T00:00:00Z", dirty: true };
+  let pushes = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (opts.method === "POST") pushes++;
+    return originalFetch(url, opts);
+  };
+  assert.equal((await library.syncNow()).ok, true);
+  assert.equal(pushes, 2);
+  assert.equal(cloud.get(ID).chapter, "60");
+  assert.equal(data.series[ID].dirty, false);
+  assert.equal(data.series[ID].cloudSyncedAt, cloud.get(ID).synced_at);
+});
+
+test("an absent push function falls back to the legacy upload", async () => {
+  const library = await engine();
+  globalThis.__noPushRpc = true;
+  data.series[ID] = { ...data.series[ID], chapter: "60", chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-60", dirty: true };
+  assert.equal((await library.syncNow()).ok, true);
+  assert.equal(cloud.get(ID).chapter, "60");
+  assert.equal(data.series[ID].dirty, false);
+});
+
+test("three conflicting push rounds leave the local winner dirty for a later pass", async () => {
+  const library = await engine();
+  data.series[ID] = { ...data.series[ID], chapter: "60", chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-60", dirty: true };
+  let pushes = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (new URL(url).pathname.endsWith("/rpc/push_series")) {
+      pushes++;
+      fake.upsert(cloud, [row({ client_schema: 2 })]);
+    }
+    return originalFetch(url, opts);
+  };
+  assert.equal((await library.syncNow()).ok, true);
+  assert.equal(pushes, 3);
+  assert.equal(cloud.get(ID).chapter, "40");
+  assert.equal(data.series[ID].chapter, "60");
+  assert.equal(data.series[ID].dirty, true);
+  globalThis.fetch = originalFetch;
+  assert.equal((await library.syncNow()).ok, true);
+  assert.equal(cloud.get(ID).chapter, "60");
+  assert.equal(data.series[ID].dirty, false);
+});
 
 test("a stalled push from one context can't overwrite a newer change pushed by another", async () => {
   const library = await engine();

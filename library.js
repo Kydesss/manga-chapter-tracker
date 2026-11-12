@@ -7,11 +7,11 @@
 // it's where Settings live (library.html#settings, settings-page.js):
 // docs/custom-sites-plan.md.
 //
-// Never moves a reading position: there's deliberately no "set chapter" here
-// yet, because sync's furthest-chapter rule would undo a backward move (see the
-// plan's "Why Set current chapter is deferred").
+// Set chapter moves a series to a chapter you type (or whose link you paste),
+// forward or back; a move back sets the synced reset marker so other devices
+// keep it: docs/sync-hardening-plan.md. Continue/Start never change anything.
 
-import { migrate, getLibrary, remove, restore, previewBulkUpsert, bulkUpsert, OWNER_KEY } from "./storage.js";
+import { migrate, getLibrary, remove, restore, previewBulkUpsert, bulkUpsert, saveChecked, OWNER_KEY } from "./storage.js";
 import { collectBookmarks } from "./bookmarks.js";
 import { getSites, siteNames } from "./sites.js";
 import { onCustomSitesChanged } from "./settings.js";
@@ -28,6 +28,7 @@ import {
   siteLabel,
   createResultGate,
   PENDING_SITE_ADD_KEY,
+  resolveChapterInput,
 } from "./view.js";
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +55,14 @@ const importSummary = $("importSummary");
 const importGroups = $("importGroups");
 const importCancel = $("importCancel");
 const importConfirm = $("importConfirm");
+const chapterDialog = $("chapterDialog");
+const chapterForm = $("chapterForm");
+const chapterTitle = $("chapterTitle");
+const chapterCurrent = $("chapterCurrent");
+const chapterInput = $("chapterInput");
+const chapterResult = $("chapterResult");
+const chapterSave = $("chapterSave");
+const chapterCancel = $("chapterCancel");
 const settingsBtn = $("settingsBtn");
 const brandSub = $("brandSub");
 const emptySites = $("emptySites");
@@ -219,7 +228,11 @@ function renderRow(r, index) {
     wireOpen(series, safeUrl(r.seriesUrl));
     actions.append(series);
   }
-  actions.append(primary);
+  const set = button("Set chapter", "btn", "set");
+  set.setAttribute("aria-label", `Set the chapter for ${r.title}`);
+  const rowEpoch = libraryEpoch;
+  set.addEventListener("click", () => openSetChapter(r, rowEpoch));
+  actions.append(set, primary);
 
   const del = button("×", "remove-btn", "remove");
   del.title = "Remove from library";
@@ -292,6 +305,117 @@ function focusRow(id) {
   target?.focus();
   return Boolean(target);
 }
+
+// --- Set chapter -------------------------------------------------------------
+//
+// Type a chapter number (or paste its link) to put a series at that chapter,
+// forward or back. A move back sets the reset marker, so sync keeps it. The
+// save only happens if the series and the library are still what the dialog
+// showed (storage.saveChecked). Design: docs/sync-hardening-plan.md.
+
+let chapterTarget = null; // { record, epoch } the dialog is for
+
+function openSetChapter(record, epoch) {
+  chapterTarget = { record, epoch };
+  chapterInput.value = "";
+  showChapterTarget();
+  chapterDialog.showModal();
+  chapterInput.focus();
+}
+
+function showChapterTarget(note = "") {
+  const r = chapterTarget.record;
+  chapterTitle.textContent = `Set chapter: ${r.title}`;
+  chapterCurrent.textContent =
+    note + (isPlan(r) ? "In Plan to read." : `Saved at chapter ${r.chapter}.`);
+  updateChapterPreview();
+}
+
+function updateChapterPreview() {
+  const r = chapterTarget.record;
+  const res = resolveChapterInput(chapterInput.value, r, sites);
+  chapterResult.classList.remove("is-match", "is-back");
+  if (!res.ok) {
+    chapterResult.textContent = res.error;
+    chapterSave.textContent = "Set chapter";
+    chapterSave.disabled = true;
+    return;
+  }
+  const c = res.chapter;
+  const sameLink = res.chapterUrl === r.chapterUrl;
+  const text = {
+    start: [`Starts reading at chapter ${c}.`, `Start at chapter ${c}`],
+    forward: [`Moves you forward from chapter ${r.chapter} to ${c}.`, `Set chapter ${c}`],
+    back: [`Moves you back from chapter ${r.chapter} to ${c}. Your other devices will keep ${c}.`, `Move back to ${c}`],
+    unknown: [
+      `Sets your place to chapter ${c}. The saved "${r.chapter}" can't be compared, so this counts as a deliberate change your other devices will keep.`,
+      `Set chapter ${c}`,
+    ],
+    same: sameLink
+      ? [`Already saved at chapter ${c}.`, "Set chapter"]
+      : [`Same chapter, with this link.`, "Update link"],
+  }[res.direction];
+  chapterResult.textContent = text[0];
+  chapterResult.classList.add(res.movesBack ? "is-back" : "is-match");
+  chapterSave.textContent = text[1];
+  chapterSave.disabled = res.direction === "same" && sameLink;
+}
+
+chapterInput.addEventListener("input", updateChapterPreview);
+chapterCancel.addEventListener("click", () => chapterDialog.close());
+
+chapterForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!chapterTarget || chapterSave.disabled) return;
+  const { record, epoch } = chapterTarget;
+  const res = resolveChapterInput(chapterInput.value, record, sites);
+  if (!res.ok) return;
+  chapterSave.disabled = true;
+  const now = new Date().toISOString();
+  const result = await saveChecked(
+    { ...record, chapter: res.chapter, chapterUrl: res.chapterUrl, status: "reading", lastReadAt: now, updatedAt: now },
+    { epoch, seenUpdatedAt: record.updatedAt ?? null, seenRecord: record, resetProgress: res.movesBack }
+  );
+  if (result.stale === "library") {
+    chapterDialog.close();
+    await load({ keepScroll: true });
+    showToast("The library changed; nothing was saved");
+    return;
+  }
+  if (result.stale === "changed") {
+    if (!result.current) {
+      chapterDialog.close();
+      await load({ keepScroll: true });
+      showToast(`${record.title} was removed meanwhile; nothing was saved`);
+      return;
+    }
+    // Changed elsewhere while the dialog was open: show what's there now and
+    // let the user confirm against it.
+    chapterTarget = { record: result.current, epoch };
+    showChapterTarget("It changed meanwhile. ");
+    chapterInput.focus();
+    return;
+  }
+  const { saved } = result;
+  chapterDialog.close();
+  await load({ keepScroll: true });
+  showToast(
+    res.movesBack ? `${saved.title}: moved back to chapter ${saved.chapter}` : `${saved.title}: chapter ${saved.chapter}`
+  );
+  runSync();
+});
+
+chapterDialog.addEventListener("close", () => {
+  // The close event is queued. A quick reopen may already have a new target.
+  if (chapterDialog.open || !chapterTarget) return;
+  const id = chapterTarget?.record.id;
+  chapterTarget = null;
+  // Back to this row's Set chapter button (the row is redrawn after a save).
+  const row = id && [...sizer.children].find((el) => el.dataset.id === id);
+  const target = row?.querySelector('[data-action="set"]');
+  if (target) target.focus();
+  else fallbackFocus().focus();
+});
 
 // --- Toast -----------------------------------------------------------------
 

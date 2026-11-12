@@ -15,6 +15,12 @@
 //   - upsert(..., { at }) commits rows with an earlier synced_at than rows
 //     already visible: a slow transaction, stamped when it wrote, committing
 //     after others.
+//   - pushSeries(rows) models rpc/push_series
+//     (supabase/migrations/20261112190000_push_series.sql): a row with
+//     base_synced_at replaces the stored row only if its synced_at still equals
+//     the base; without a base (or with no stored row) it's inserted only if
+//     absent. Returns the accepted [{ id, synced_at }]. Every column is written.
+//   - GET also supports id=in.("a","b") for fetching rows by id.
 
 const TIMESTAMP_COLUMNS = ["created_at", "updated_at", "last_read_at", "progress_at", "progress_reset_at"];
 
@@ -45,6 +51,13 @@ export function createFakeSeries() {
     for (const key of ["synced_at", "or"]) {
       if (p.has(key)) throw new Error(`Unexpected top-level ${key}= filter; sync sends and=(...)`);
     }
+    const idIn = p.get("id");
+    if (idIn) {
+      const m = idIn.match(/^in\.\((.*)\)$/);
+      if (!m) throw new Error(`Unsupported id filter ${idIn}`);
+      const wanted = new Set(JSON.parse(`[${m[1]}]`));
+      rows = rows.filter((r) => wanted.has(r.id));
+    }
     // The pre-v2 cursor filter, still served to older clients.
     const updatedGt = p.get("updated_at")?.replace(/^gt\./, "");
     if (updatedGt) rows = rows.filter((r) => Date.parse(r.updated_at) > Date.parse(updatedGt));
@@ -67,7 +80,7 @@ export function createFakeSeries() {
   }
 
   // Returns null on success, or the error text for a rejected batch.
-  function upsert(table, rows, { at } = {}) {
+  function upsertCheck(rows) {
     for (const r of rows) {
       for (const c of TIMESTAMP_COLUMNS) {
         if (r[c] != null && Number.isNaN(Date.parse(r[c]))) return `invalid input syntax for type timestamp with time zone: "${r[c]}"`;
@@ -75,6 +88,12 @@ export function createFakeSeries() {
       if (!(r.client_schema >= 2)) return 'null value in column "client_schema" violates not-null constraint';
       if ((r.chapter == null) !== (r.chapter_url == null)) return 'violates check constraint "series_chapter_with_url"';
     }
+    return null;
+  }
+
+  function upsert(table, rows, { at } = {}) {
+    const invalid = upsertCheck(rows);
+    if (invalid) return invalid;
     for (const r of rows) {
       const existing = table.get(r.id);
       table.set(r.id, { ...(existing || {}), ...structuredClone(r), synced_at: at ?? stamp() });
@@ -82,12 +101,37 @@ export function createFakeSeries() {
     return null;
   }
 
+  // rpc/push_series. Returns { error } for a rejected batch (nothing written),
+  // else { accepted: [{ id, synced_at }] }.
+  // `userId`: the caller's auth.uid(), written as user_id.
+  function pushSeries(table, rows, { userId } = {}) {
+    ensureStamped(table);
+    const plain = rows.map(({ base_synced_at: _b, ...r }) => r);
+    const invalid = upsertCheck(plain);
+    if (invalid) return { error: invalid };
+    const accepted = [];
+    for (const { base_synced_at: base, ...r } of rows) {
+      const existing = table.get(r.id);
+      const ok = existing ? base != null && existing.synced_at === base : true;
+      if (!ok) continue;
+      const synced_at = stamp();
+      table.set(r.id, {
+        ...structuredClone(r),
+        ...(userId !== undefined ? { user_id: userId } : {}),
+        created_at: existing?.created_at ?? r.created_at,
+        synced_at,
+      });
+      accepted.push({ id: r.id, synced_at });
+    }
+    return { accepted };
+  }
+
   // Move the server clock forward (a slow pull, or time between passes).
   const advance = (ms) => {
     clock += ms;
   };
 
-  return { select, upsert, stamp, advance };
+  return { select, upsert, pushSeries, stamp, advance };
 }
 
 // PostgREST logic filters: and=(a,b) / or=(a,b), nested as and(...) / or(...),

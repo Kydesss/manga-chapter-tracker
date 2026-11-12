@@ -11,6 +11,8 @@ import {
   remove,
   restore,
   saveIfAllowed,
+  saveChecked,
+  getOneWithEpoch,
   updateMap,
   upsert,
 } from "../storage.js";
@@ -19,6 +21,58 @@ import { resolveConflict } from "../merge.js";
 import { shortcutSaveDecision } from "../view.js";
 
 let data;
+
+test("checked saves catch merged progress with an unchanged timestamp", async () => {
+  const record = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-40");
+  await upsert(record);
+  const seen = await getOneWithEpoch(record.id);
+  data.series[record.id].chapter = "50";
+  data.series[record.id].chapterUrl = record.chapterUrl.replace("40", "50");
+  const before = structuredClone(data);
+  const result = await saveChecked(record, { epoch: seen.epoch, seenUpdatedAt: seen.record.updatedAt, seenRecord: seen.record });
+  assert.equal(result.stale, "changed");
+  assert.deepEqual(data, before);
+});
+
+test("saving a displayed record retains a cloud base learned since it was drawn", async () => {
+  const record = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-40");
+  await upsert(record);
+  const seen = await getOneWithEpoch(record.id);
+  const base = "2026-11-12T19:00:00.123456+00:00";
+  data.series[record.id].cloudSyncedAt = base;
+  const result = await saveChecked({ ...seen.record, cloudSyncedAt: "old" }, { epoch: seen.epoch, seenUpdatedAt: seen.record.updatedAt, seenRecord: seen.record });
+  assert.equal(result.saved.cloudSyncedAt, base);
+});
+
+test("checked saves reject a switched library and a changed or removed series without writing", async () => {
+  const record = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-40");
+  await upsert(record);
+  const seen = await getOneWithEpoch(record.id);
+  const pending = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-41");
+  const before = structuredClone(data);
+  assert.deepEqual(await saveChecked(pending, { epoch: "another-library", seenUpdatedAt: seen.record.updatedAt }), { stale: "library" });
+  assert.deepEqual(data, before);
+  await upsert({ ...pending, chapter: "50" });
+  const changed = structuredClone(data);
+  assert.equal((await saveChecked(pending, { epoch: seen.epoch, seenUpdatedAt: seen.record.updatedAt })).stale, "changed");
+  assert.deepEqual(data, changed);
+  await remove(record.id);
+  const removed = structuredClone(data);
+  assert.deepEqual(await saveChecked(pending, { epoch: seen.epoch, seenUpdatedAt: seen.record.updatedAt }), { stale: "changed", current: null });
+  assert.deepEqual(data, removed);
+});
+
+test("checked saves create unseen series and preserve a deliberate move back through a merge", async () => {
+  const record = parseChapterUrl("https://www.manganami.com/manga/blue-lock/chapter-40");
+  const seen = await getOneWithEpoch(record.id);
+  const first = await saveChecked(record, { epoch: seen.epoch });
+  assert.equal(first.saved.chapter, "40");
+  const back = await saveChecked({ ...record, chapter: "3", chapterUrl: record.chapterUrl.replace("40", "3") }, {
+    epoch: seen.epoch, seenUpdatedAt: first.saved.updatedAt, resetProgress: true,
+  });
+  assert.equal(back.saved.progressResetAt, back.saved.progressAt);
+  assert.equal(resolveConflict(back.saved, first.saved).chapter, "3");
+});
 
 beforeEach(() => {
   data = {};

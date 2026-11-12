@@ -15,6 +15,14 @@ Shiori is **local-first**: it works offline, with no account, storing everything
 
 For the version history and what changed in each release, see [CHANGELOG.md](./CHANGELOG.md).
 
+In the next update, each library row has **Set chapter**: enter a number or paste
+the chapter's link. Shiori spells out a move back and sync keeps that choice.
+If the series or account changed while the popup or dialog was open, the save
+shows the current state and asks you to check again. Conditional cloud uploads
+also prevent stale devices overwriting newer cloud rows once the new migration
+is applied; until then, uploads use the existing behavior. See
+[the sync hardening plan](./docs/sync-hardening-plan.md).
+
 ## About this project
 
 Manga readers follow dozens to hundreds of ongoing series, each updating on its own schedule. The web's default tool for "remember where I was" is the browser bookmark, which was never built for it: bookmarks are flat, static, carry no reading state, and can't span the separate bookmark tools that each manga site ships. The pain scales badly. The reader who inspired this had over 3,000 bookmarks across multiple sites.
