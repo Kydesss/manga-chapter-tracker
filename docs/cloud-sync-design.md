@@ -162,12 +162,13 @@ This is the single source of truth for how conflicts resolve. Reading progress i
 When the same `id` exists on both sides, resolve field by field:
 
 - **Deletion (`deleted`): most recent action wins, by `updatedAt`.** Resolved first. Deletion is explicit and intentional, so recency is the right signal. A newer delete sticks; a newer re-save resurrects the series. If the winning state is deleted, the record is a tombstone and the chapter is moot. A resurrection restarts the series from the re-save: the tombstone's old chapter doesn't compete under the furthest-chapter rule below (added 2026-11-12, so planning a removed series keeps it as Plan to read instead of reviving its old chapter).
-- **`chapter` (reading position): furthest chapter wins.** Parse both labels to numbers (handles decimals like `83.2`) and keep the higher one, independent of which record was written more recently. Example: local `120` updated three weeks ago beats cloud `100` updated yesterday, so you are never moved back. If a label cannot be parsed (should not happen given the parser), fall back to `updatedAt` so a bad value cannot blank out progress.
+- **`chapter` (reading position): furthest chapter wins.** Parse both labels to numbers (handles decimals like `83.2`) and keep the higher one, independent of which record was written more recently. On a tie, the copy set more recently (`progressAt`, then `lastReadAt`) wins, so devices converge (cloud schema v2). Example: local `120` updated three weeks ago beats cloud `100` updated yesterday, so you are never moved back. If a label cannot be parsed (should not happen given the parser), fall back to `updatedAt` so a bad value cannot blank out progress.
 - **Other fields (title, URLs): newer by `updatedAt` wins.** Cosmetic, recency is fine.
 - **`createdAt`: keep the earliest.**
 - **Result timestamp:** the merged record's `updatedAt` is the max of the two, and it is marked `dirty` if the merge changed the local value, so the resolved value propagates outward.
+- **Reset marker (`progressResetAt`, cloud schema v2):** keep the later of the two. A side's chapter only competes in the rules above if its `progressAt` (when that chapter was set; it travels with the chapter) is at or after the marker, so progress from before a reset never comes back. A removal sets it, and so does a confirmed move back from the popup. See `docs/cloud-schema-v2-plan.md`.
 
-**Known limitation (accepted):** because progress is forward-only, a normal save cannot move you to an *earlier* chapter (a reread, or a renumbered site). This is rare; the "set current chapter" override is deferred (see Deferred section).
+**Known limitation (accepted in v0.2):** because progress is forward-only, a normal save cannot move you to an *earlier* chapter (a reread, or a renumbered site). Cloud schema v2 lifts this for a confirmed move back from the popup, through the reset marker above.
 
 ### First sign-in merge
 
@@ -262,7 +263,7 @@ Ordered so the two riskiest, plan-invalidating pieces come first.
 - **Auth token type (highest risk).** The whole auth path depends on getting a usable Google ID token from `launchWebAuthFlow`. Validated in Milestone 1 deliberately.
 - **MV3 session lifetime.** The service worker can be killed anytime; the session must always be reloadable from storage, and access-token refresh handled when it expires mid-session.
 - **OAuth verification.** Google may require privacy policy + app verification before non-test users can sign in.
-- **Clock skew.** `updatedAt` is client-generated. The pull cursor uses the server's returned timestamps to avoid skew gaps; chapter conflicts use furthest-wins, not time, so they are immune to skew. If write-time skew ever matters, switch to server-set `updated_at` via a trigger.
+- **Clock skew.** `updatedAt` is client-generated. Chapter conflicts use furthest-wins, not time, so they are immune to skew. The pull cursor was meant to use server timestamps, but `updated_at` is set by clients, so a fast clock could hide changes (found in the PR 6 review). Cloud schema v2 adds a server-set `synced_at` for the cursor; see `docs/cloud-schema-v2-plan.md`.
 - **Conflict granularity.** Resolution is per record (per series), which is right for a single-user tracker. No field-level merges beyond the rule above.
 
 ## Verification plan
@@ -323,8 +324,9 @@ This refines Invariant 3: `markSynced` clears `dirty` only on records whose `upd
 hasn't changed since they were pushed. A record saved again during an upload stays
 dirty and goes up on the next pass.
 
-**Proposed table migration (not applied).** Apply this once Plan-to-read records should
-sync:
+**Superseded by cloud schema v2** (`docs/cloud-schema-v2-plan.md`), which makes the
+chapter nullable but leaves `status` and the metadata columns out for now. The original
+proposal, for reference:
 
 ```sql
 alter table public.series

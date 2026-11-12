@@ -7,6 +7,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import { migrate, getOwner, remove, restore, getLibrary } from "../storage.js";
+import { createFakeSeries, response } from "./fake-postgrest.js";
 
 const A = { id: "user-a", email: "a@example.test" };
 const B = { id: "user-b", email: "b@example.test" };
@@ -14,6 +15,7 @@ const B = { id: "user-b", email: "b@example.test" };
 let data; // chrome.storage.local
 let clouds; // { [userId]: Map of id -> row }
 let posts; // [{ user, rows }]
+let fake; // the server's behavior for those rows
 let getGate; // when set, GETs wait on it
 let getStarted;
 
@@ -70,13 +72,14 @@ beforeEach(() => {
   getGate = null;
   getStarted = null;
   posts = [];
+  fake = createFakeSeries();
   clouds = {
     [A.id]: new Map([[A_SERIES, cloudRow(A, A_SERIES)]]),
     [B.id]: new Map([[B_SERIES, cloudRow(B, B_SERIES, { chapter: "3" })]]),
   };
   // A device that has synced with account A, now signed out.
   data = {
-    schemaVersion: 6,
+    schemaVersion: 7,
     lastSyncCursor: "2026-09-01T00:00:00.000Z",
     libraryOwner: { id: A.id, email: A.email },
     series: { [A_SERIES]: rec(A_SERIES) },
@@ -108,19 +111,13 @@ beforeEach(() => {
         getStarted?.();
         await getGate;
       }
-      const gt = new URL(url).searchParams.get("updated_at")?.replace(/^gt\./, "");
-      const rows = [...cloud.values()]
-        .filter((x) => !gt || x.updated_at > gt)
-        .sort((a, b) => a.updated_at.localeCompare(b.updated_at));
-      return { ok: true, status: 200, json: async () => structuredClone(rows), text: async () => "" };
+      return response(200, fake.select(cloud, url));
     }
     const rows = JSON.parse(opts.body);
     posts.push({ user, rows });
-    if (rows.some((r) => r.user_id !== user)) {
-      return { ok: false, status: 403, json: async () => null, text: async () => "RLS" };
-    }
-    for (const r of rows) cloud.set(r.id, r);
-    return { ok: true, status: 201, json: async () => null, text: async () => "" };
+    if (rows.some((r) => r.user_id !== user)) return response(403, "RLS");
+    const error = fake.upsert(cloud, rows);
+    return error ? response(400, error) : response(201, null);
   };
 });
 
@@ -143,7 +140,13 @@ test("signing in as a different account pauses sync instead of pushing the libra
 
 test("keep separate sets A's library aside, loads B's, and brings A's back on switching back", async () => {
   const sync = await engine();
-  data.series[A_SERIES].dirty = true; // an unpushed change of A's
+  // An unpushed change of A's.
+  data.series[A_SERIES] = rec(A_SERIES, {
+    chapter: "11",
+    chapterUrl: "https://www.manganami.com/manga/a-series/chapter-11",
+    updatedAt: "2026-09-02T00:00:00.000Z",
+    dirty: true,
+  });
   signIn(B);
   assert.equal((await sync.syncNow()).skipped, "account-mismatch");
 

@@ -15,6 +15,13 @@
 //   3. Cosmetic fields (title, seriesUrl) take the more recent value, except that
 //      a real title is never replaced by the slug-derived fallback.
 //   4. createdAt keeps the earliest; updatedAt keeps the max.
+//   5. progressResetAt (when the series' reading history last restarted: a
+//      removal, or a deliberate move back) keeps the later of the two. A side's
+//      chapter only competes in rules 1-2 if its progressAt (when that chapter
+//      was set) is at or after it, so progress from before a reset never comes
+//      back. progressAt travels with the chapter; merges never refresh it,
+//      unlike updatedAt (which an older client's merge can bump on a stale
+//      chapter).
 
 import { isSlugTitle } from "./parser.js";
 
@@ -52,9 +59,40 @@ const SYNC_FIELDS = [
   "chapter",
   "chapterUrl",
   "seriesUrl",
+  "lastReadAt",
+  "progressAt",
+  "progressResetAt",
   "deleted",
   "updatedAt",
 ];
+
+// When a record's chapter was set. Unknown ("") counts as before any reset,
+// so a chapter of unknown age can't come back after one. Deliberately no
+// fallback: updatedAt is refreshed by merges on stale chapters, and lastReadAt
+// may be a display estimate (a backup's or v4's guess from updatedAt). Every
+// path that sets a chapter or upgrades an old record fills progressAt itself,
+// from a real read time at most (storage.js toV7, normalizeBackupRecord).
+export function progressTime(rec) {
+  return rec.progressAt || "";
+}
+
+// Of two records at the same chapter: the one set (then read) more recently,
+// else the local one.
+function laterSet(local, remote) {
+  for (const field of ["progressAt", "lastReadAt"]) {
+    const l = local[field] || "";
+    const r = remote[field] || "";
+    if (l !== r) return r > l ? remote : local;
+  }
+  return local;
+}
+
+// The later of two ISO timestamps (either may be missing).
+function laterOf(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return b > a ? b : a;
+}
 
 export function sameSyncContent(a, b) {
   if (!a || !b) return false;
@@ -77,6 +115,11 @@ export function resolveConflict(local, remote) {
   // 1. Deletion by recency.
   const deleted = newer.deleted === true;
 
+  // 5. Progress from before the latest reset doesn't count.
+  const progressResetAt = laterOf(local.progressResetAt, remote.progressResetAt);
+  const counts = (side) =>
+    hasChapter(side.chapter) && (!progressResetAt || progressTime(side) >= progressResetAt);
+
   // 2. Furthest chapter wins (only meaningful if not deleted).
   let chapterSource = newer;
   if (!deleted && older.deleted === true) {
@@ -85,18 +128,31 @@ export function resolveConflict(local, remote) {
     // restarts from the resurrecting save (which may be Plan to read).
     chapterSource = newer;
   } else if (!deleted) {
-    const lHas = hasChapter(local.chapter);
-    const rHas = hasChapter(remote.chapter);
-    if (lHas !== rHas) {
-      // Reading supersedes plan, regardless of which side is newer.
-      chapterSource = lHas ? local : remote;
+    const lCounts = counts(local);
+    const rCounts = counts(remote);
+    if (lCounts !== rCounts) {
+      // Reading supersedes plan, regardless of which side is newer. A chapter
+      // from before the reset counts as no chapter here.
+      chapterSource = lCounts ? local : remote;
+    } else if (!lCounts) {
+      // Neither counts. A chapter from before the reset never beats Plan to
+      // read; between two plans (or, only with bad clocks, two pre-reset
+      // chapters) the newer record wins.
+      const lHas = hasChapter(local.chapter);
+      const rHas = hasChapter(remote.chapter);
+      chapterSource = lHas !== rHas ? (lHas ? remote : local) : newer;
     } else {
       const ln = chapterToNumber(local.chapter);
       const rn = chapterToNumber(remote.chapter);
       if (ln === null || rn === null) {
-        chapterSource = newer; // both plan, or bad data: fall back to recency
+        chapterSource = newer; // bad data: fall back to recency
+      } else if (ln !== rn) {
+        chapterSource = ln > rn ? local : remote;
       } else {
-        chapterSource = ln >= rn ? local : remote;
+        // The same chapter on both sides: the one set more recently, then
+        // read more recently. Both devices pick the same side, so their read
+        // and set times converge instead of being uploaded back and forth.
+        chapterSource = laterSet(local, remote);
       }
     }
   }
@@ -116,11 +172,13 @@ export function resolveConflict(local, remote) {
     // Preserve it through sync conflict resolution instead of dropping it.
     status: chapterSource.status || (chapterSource.chapter == null ? "plan" : "reading"),
     lastReadAt: chapterSource.lastReadAt ?? null,
+    progressAt: hasChapter(chapterSource.chapter) ? chapterSource.progressAt ?? null : null,
     coverUrl: local.coverUrl ?? remote.coverUrl ?? null,
     latestChapter: local.latestChapter ?? remote.latestChapter ?? null,
     latestChapterUrl: local.latestChapterUrl ?? remote.latestChapterUrl ?? null,
     latestPublishedAt: local.latestPublishedAt ?? remote.latestPublishedAt ?? null,
     metadataCheckedAt: local.metadataCheckedAt ?? remote.metadataCheckedAt ?? null,
+    progressResetAt,
     createdAt,
     updatedAt,
     deleted,

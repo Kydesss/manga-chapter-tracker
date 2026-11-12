@@ -33,11 +33,13 @@ grows into a small cross-platform service.
 - **On `master`, unreleased (targeting v0.4.0):** the `plan`/`reading` status,
   **Plan to read from a series page**, a shared forward-only bulk write (`bulkUpsert`),
   storage schema v3-v6 (v5 moved NatoManga links to manganami.com; v6 records the
-  library's owner), the full-page library, and storage/sync fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
+  library's owner), the full-page library, account isolation, and storage/sync fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
   updates**) was removed before release. See
   [Site bookmark import](#paused-site-bookmark-import).
-- **In progress:** account isolation (Sync hardening), on `fix/account-isolation`.
-  Next in Bundle A: Settings and browser-bookmark import, on top of the full-page library
+- **In progress:** cloud schema v2 (Sync hardening), on `feat/cloud-schema-v2`: Plan to
+  read syncs, a server change order for the sync cursor, and a synced progress reset
+  marker ([cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)). The migration is
+  written but not applied. Next in Bundle A: Settings and browser-bookmark import, on top of the full-page library
   ([library-page-plan.md](./docs/library-page-plan.md)). Site bookmark import is paused
   with no site planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
@@ -144,10 +146,10 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   (`plan` | `reading` | later `completed`/`dropped`). Save a series page as "plan to
   read"; saving a chapter flips it to "reading." Needs series-page detection in the
   parser. Sync rule: `reading` supersedes `plan`; furthest-chapter governs once reading.
-  *Landed on the `autoscraper` branch:* the `plan`/`reading` field, Plan to read in
-  the popup, saving a series page as Plan to read (the parser recognizes series pages),
-  "saving a chapter flips it to reading," and the sync rule in `merge.js`. Still to do:
-  syncing Plan-to-read records, which needs the cloud migration.
+  *On `master`:* the `plan`/`reading` field, Plan to read in the popup, saving a series
+  page as Plan to read (the parser recognizes series pages), "saving a chapter flips it
+  to reading," and the sync rule in `merge.js`. Syncing Plan-to-read records is in
+  progress with cloud schema v2 (see Sync hardening).
 - **Bulk import of browser bookmarks.** One-click import (the `bookmarks` permission)
   that filters to supported/custom sites, parses each URL, dedupes by furthest chapter,
   and marks records dirty to sync. Preview/confirm UI lives in the app. Covers readers
@@ -260,45 +262,56 @@ Done alongside the bundle that first needs them:
 ## Sync hardening (ongoing)
 
 Deferred from the v0.2 cloud-sync release (see `docs/cloud-sync-design.md`), plus gaps
-found in later reviews. The first two are real data problems, found in the Codex review of
-the library page (PR 6); they predate it.
+found in later reviews.
 
-- **Account isolation (in progress, `fix/account-isolation`).** The library records its
-  owner; a different account pauses sync and the popup offers Keep separate (libraries
-  parked per account) or Merge. See Invariant 5 in `docs/cloud-sync-design.md`.
-- **Server change order for the sync cursor.** The incremental-pull cursor is built from
-  `updated_at`, which devices set from their own clocks. One record stamped ahead of real
-  time (a device with a fast clock) moves the cursor ahead, and later changes from other
-  devices are skipped until real time catches up. Fix: a server-assigned change column
-  (a sequence or `now()` on write) for the cursor, keeping `updated_at` for conflict
-  resolution. Needs a cloud migration; do it with the ones below.
+- **Account isolation (done, PR #7).** The library records its owner; a different
+  account pauses sync and the popup offers Keep separate (libraries parked per account)
+  or Merge. See Invariant 5 in `docs/cloud-sync-design.md`.
+- **Cloud schema v2 (in progress, `feat/cloud-schema-v2`).** One migration for the four
+  items marked *(schema v2)* below; see
+  [cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md). Written and reviewed in the
+  repo, not yet applied to the live project. Older installs stop pushing once it runs
+  (a hard cutover), so the migration and the extension release go out together.
+- **Server change order for the sync cursor** *(schema v2)*. The incremental-pull cursor
+  is built from `updated_at`, which devices set from their own clocks. One record stamped
+  ahead of real time (a device with a fast clock) moves the cursor ahead, and later
+  changes from other devices are skipped until real time catches up. Fix: a
+  server-assigned `synced_at` for the cursor, keeping `updated_at` for conflict
+  resolution.
+- **Concurrent uploads can briefly overwrite each other.** A push is an unconditional
+  upsert, so if device A pulls chapter 40, device B pushes 50, and A's push of 41 lands
+  last, the cloud holds 41 until B's next pass merges and pushes 50 again. It converges
+  (furthest chapter wins), but other devices can see the lower chapter in between.
+  Fix: a conditional write (an RPC that merges server-side, or an `updated_at` /
+  `synced_at` precondition). Found in Codex review of cloud schema v2; predates it.
 - Tombstone purge (hard-delete old soft-deletes).
 - Fuller multi-account handling beyond Keep separate: a way to see or export a parked
   library without signing in as its account, and to recover a library whose owner was
   unknown at upgrade.
 - "Resolved N differences" indicator after a conflict.
-- "Set current chapter" override to intentionally move to an earlier chapter. The v0.3.3
-  "Go to chapter X" button is the read-only half of this; deliberately moving the saved
-  position backward still means overwriting it from the chapter page. Site import raises
-  the stakes: an import that misreads a page can only be undone this way.
-- **One synced reset marker: `progressResetAt`.** Proposed while planning the library
-  page. Sync's furthest-chapter rule means a deliberate backward move (Set current
+- "Set current chapter" override to intentionally move to an earlier chapter *(schema
+  v2: from the chapter page)*. Saving an earlier chapter from the popup, after its "This
+  would move you back" warning, now sets the reset marker below, so sync keeps it. Still
+  to do: a Set current chapter action in the library page, which needs a safe way to get
+  the chapter's link.
+- **One synced reset marker: `progressResetAt`** *(schema v2)*. Proposed while planning
+  the library page. Sync's furthest-chapter rule means a deliberate backward move (Set current
   chapter, or saving an earlier chapter from the popup while signed in) is undone by the
   next sync pass today. A synced `progressResetAt`, set by a delete or by Set current
   chapter, would let the merge ignore progress from before the reset. It solves this and
   the deletion boundary below with one cloud column; see
   [library-page-plan.md](./docs/library-page-plan.md).
-- **A deletion boundary that syncs.** Since v0.4, a save that resurrects a deleted series
+- **A deletion boundary that syncs** *(schema v2: a removal sets `progressResetAt`)*.
+  Since v0.4, a save that resurrects a deleted series
   restarts it, so the tombstone's old chapter doesn't win. But a device that never saw the
   deletion still holds the old chapter, and merging it with the restart revives that
   chapter for everyone (found in Codex review of PR #3). Fix: store when a series was
   last deleted (or a restart generation) and sync it, so progress from before the
-  deletion never counts. Needs a cloud column; do it with the migration below.
-- **Plan to read in the cloud.** Make `chapter` nullable, and add `status` and the
-  metadata columns to the Supabase table, so Plan-to-read records and
-  covers/latest chapters sync. The merge rule it depends on, "a real chapter always
-  beats no chapter," is already in `merge.js`. See `docs/cloud-sync-design.md`,
-  "Addendum: schema v3", for the proposed migration.
+  deletion never counts.
+- **Plan to read in the cloud** *(schema v2)*. `chapter` and `chapter_url` become
+  nullable, so Plan-to-read records sync. A `status` column and the metadata columns
+  (covers, latest chapters) wait until something needs them: status follows from the
+  chapter today, and nothing writes metadata since the NatoManga importer was removed.
 
 ## Polish backlog (small, pick up anytime)
 

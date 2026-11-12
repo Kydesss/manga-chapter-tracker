@@ -238,3 +238,116 @@ test("a real title beats the slug-derived fallback, whichever side is newer", ()
   });
   assert.equal(resolveConflict(imported, renamed).title, "Witch and Mercenary (Official)");
 });
+
+// --- Rule 5: progressResetAt (cloud schema v2) ------------------------------
+
+const RESET = "2026-10-01T00:00:00.000Z";
+
+test("a device that missed a removal can't revive the old chapter after a restart", () => {
+  // Device A removed the series (the marker) and restarted it at chapter 3.
+  const restarted = rec({ chapter: "3", chapterUrl: "u3", progressAt: "2026-10-02T00:00:00.000Z", progressResetAt: RESET, updatedAt: "2026-10-02T00:00:00.000Z" });
+  // Device B never saw the removal: it still holds chapter 40 from before.
+  const stale = rec({ chapter: "40", chapterUrl: "u40", progressResetAt: null, updatedAt: "2026-09-01T00:00:00.000Z" });
+  for (const [a, b] of [[restarted, stale], [stale, restarted]]) {
+    const m = resolveConflict(a, b);
+    assert.equal(m.chapter, "3");
+    assert.equal(m.chapterUrl, "u3");
+    assert.equal(m.progressResetAt, RESET, "the marker survives the merge");
+  }
+});
+
+test("a deliberate move back survives a stale device's further chapter", () => {
+  const movedBack = rec({ chapter: "3", chapterUrl: "u3", progressAt: RESET, progressResetAt: RESET, updatedAt: RESET });
+  const stale = rec({ chapter: "40", chapterUrl: "u40", updatedAt: "2026-09-30T23:59:59.000Z" });
+  assert.equal(resolveConflict(stale, movedBack).chapter, "3");
+  assert.equal(resolveConflict(movedBack, stale).chapter, "3");
+});
+
+test("progress saved after a reset still moves forward under the furthest-chapter rule", () => {
+  const movedBack = rec({ chapter: "3", chapterUrl: "u3", progressAt: RESET, progressResetAt: RESET, updatedAt: RESET });
+  // Another device pulled the reset, then read on: chapter 5, stamped after it.
+  const later = rec({ chapter: "5", chapterUrl: "u5", progressAt: "2026-10-03T00:00:00.000Z", progressResetAt: RESET, updatedAt: "2026-10-03T00:00:00.000Z" });
+  assert.equal(resolveConflict(movedBack, later).chapter, "5");
+  // ...and an older save that is still after the reset competes too.
+  const sameMoment = rec({ chapter: "4", chapterUrl: "u4", progressAt: RESET, updatedAt: RESET });
+  assert.equal(resolveConflict(movedBack, sameMoment).chapter, "4");
+});
+
+test("a series planned after a removal stays planned against a stale chapter", () => {
+  const planned = rec({ chapter: null, chapterUrl: null, status: "plan", progressResetAt: RESET, updatedAt: "2026-10-02T00:00:00.000Z" });
+  const stale = rec({ chapter: "40", chapterUrl: "u40", updatedAt: "2026-09-01T00:00:00.000Z" });
+  const m = resolveConflict(stale, planned);
+  assert.equal(m.chapter, null);
+  assert.equal(m.status, "plan");
+});
+
+test("without a reset, a chapter still beats Plan to read whichever is newer", () => {
+  const planned = rec({ chapter: null, chapterUrl: null, status: "plan", updatedAt: "2026-10-02T00:00:00.000Z" });
+  const reading = rec({ chapter: "40", chapterUrl: "u40", updatedAt: "2026-09-01T00:00:00.000Z" });
+  assert.equal(resolveConflict(planned, reading).chapter, "40");
+});
+
+test("when neither chapter is after the reset, the newer record wins", () => {
+  // Only reachable with bad clocks: the marker is later than both saves.
+  const a = rec({ chapter: "7", chapterUrl: "u7", progressResetAt: RESET, updatedAt: "2026-09-02T00:00:00.000Z" });
+  const b = rec({ chapter: "9", chapterUrl: "u9", updatedAt: "2026-09-01T00:00:00.000Z" });
+  assert.equal(resolveConflict(a, b).chapter, "7");
+});
+
+test("a differing reset marker or read time marks the merged record for upload", () => {
+  const local = rec({ progressResetAt: RESET, updatedAt: RESET, lastReadAt: RESET });
+  const remote = rec({ progressResetAt: null, updatedAt: RESET, lastReadAt: RESET });
+  const { next } = mergeRemoteIntoLocal({ [local.id]: local }, [remote]);
+  assert.equal(next[local.id].progressResetAt, RESET);
+  assert.equal(next[local.id].dirty, true, "the cloud is missing the marker");
+});
+
+test("a stale chapter whose updatedAt an older version's merge refreshed still doesn't count after a reset", () => {
+  // Codex review, round 1: an older client pulled the restart, kept chapter 40
+  // under its furthest-chapter rule, and took the newer updatedAt. The chapter
+  // itself was set in September, which progressAt (or lastReadAt) still says.
+  const restarted = rec({ chapter: "3", chapterUrl: "u3", progressAt: "2026-10-02T00:00:00.000Z", progressResetAt: RESET, updatedAt: "2026-10-02T00:00:00.000Z" });
+  const oldMerge = rec({ chapter: "40", chapterUrl: "u40", lastReadAt: "2026-09-01T00:00:00.000Z", progressAt: "2026-09-01T00:00:00.000Z", progressResetAt: null, updatedAt: "2026-10-02T00:00:00.000Z" });
+  assert.equal(resolveConflict(oldMerge, restarted).chapter, "3");
+  assert.equal(resolveConflict(restarted, oldMerge).chapter, "3");
+});
+
+test("progressAt travels with the chapter, not with the newer record", () => {
+  const further = rec({ chapter: "40", chapterUrl: "u40", progressAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z" });
+  const newer = rec({ chapter: "30", chapterUrl: "u30", progressAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" });
+  const m = resolveConflict(further, newer);
+  assert.equal(m.chapter, "40");
+  assert.equal(m.progressAt, "2026-09-01T00:00:00.000Z");
+  assert.equal(m.updatedAt, "2026-10-01T00:00:00.000Z");
+});
+
+test("a legacy chapter with no read time counts as older than any reset", () => {
+  // Codex review, round 2: an older version's merge kept this chapter 40 (with
+  // no known read time) but took the restart's newer updatedAt.
+  const restarted = rec({ chapter: "3", chapterUrl: "u3", progressAt: "2026-10-02T00:00:00.000Z", progressResetAt: RESET, updatedAt: "2026-10-02T00:00:00.000Z" });
+  const legacy = rec({ chapter: "40", chapterUrl: "u40", lastReadAt: null, updatedAt: "2026-10-02T00:00:00.000Z" });
+  assert.equal(resolveConflict(legacy, restarted).chapter, "3");
+  assert.equal(resolveConflict(restarted, legacy).chapter, "3");
+});
+
+test("the same chapter on both sides takes the more recently set one, whichever side it's on", () => {
+  // Codex review, round 2: otherwise each device keeps its own times and they
+  // upload them back and forth forever.
+  const sept = rec({ chapter: "40", chapterUrl: "u40", progressAt: "2026-09-01T00:00:00.000Z", lastReadAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z" });
+  const oct = rec({ chapter: "40", chapterUrl: "u40b", progressAt: "2026-10-01T00:00:00.000Z", lastReadAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" });
+  for (const [a, b] of [[sept, oct], [oct, sept]]) {
+    const m = resolveConflict(a, b);
+    assert.equal(m.progressAt, oct.progressAt);
+    assert.equal(m.lastReadAt, oct.lastReadAt);
+    assert.equal(m.chapterUrl, "u40b");
+  }
+});
+
+test("a chapter from before a reset never beats Plan to read, in either order", () => {
+  // Codex review, round 3: an older version's merge kept chapter 40 (read in
+  // September) but took the plan's newer updatedAt.
+  const plan = rec({ chapter: null, chapterUrl: null, status: "plan", progressResetAt: RESET, updatedAt: "2026-10-02T00:00:00.000Z" });
+  const stale = rec({ chapter: "40", chapterUrl: "u40", lastReadAt: "2026-09-01T00:00:00.000Z", progressAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-10-02T00:00:00.000Z" });
+  assert.equal(resolveConflict(stale, plan).chapter, null);
+  assert.equal(resolveConflict(plan, stale).chapter, null);
+});
