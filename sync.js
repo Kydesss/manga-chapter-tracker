@@ -9,7 +9,7 @@
 
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
 import { getSession, refreshSession } from "./auth.js";
-import { SITES } from "./parser.js";
+import { SITES, upgradeSiteUrl } from "./parser.js";
 import { mergeRemoteIntoLocal } from "./merge.js";
 import {
   migrate,
@@ -52,15 +52,18 @@ function toRow(rec, userId) {
   };
 }
 
-function fromRow(row) {
+// Links on a site's old domain (rows pushed before the site moved, or by a
+// device on an older version) are read as the current domain, the same way
+// the v5 migration rewrote local records, so both sides compare equal.
+export function fromRow(row) {
   return {
     id: row.id,
     site: row.site,
     slug: row.slug,
     title: row.title,
     chapter: row.chapter,
-    chapterUrl: row.chapter_url,
-    seriesUrl: row.series_url,
+    chapterUrl: upgradeSiteUrl(row.chapter_url),
+    seriesUrl: upgradeSiteUrl(row.series_url),
     siteName: SITE_NAME[row.site] || row.site,
     status: row.chapter == null ? "plan" : "reading",
     // Before the dedicated cloud column exists, updated_at is the best

@@ -13,6 +13,7 @@
 // context's write could silently undo the other's.
 
 import { resolveConflict, pickTitle, hasChapter, chapterToNumber } from "./merge.js";
+import { upgradeSiteUrl } from "./parser.js";
 
 const KEY = "series"; // { [id]: record }
 const SCHEMA_KEY = "schemaVersion";
@@ -20,8 +21,25 @@ const CURSOR_KEY = "lastSyncCursor"; // server timestamp of the last pulled chan
 const SNAPSHOT_KEY = "preSyncSnapshot"; // safety backup before first-ever sync
 const LOCK_NAME = "shiori-library";
 
-// 2 = sync fields; 3 = status + series metadata fields; 4 = lastReadAt backfill
-const CURRENT_SCHEMA = 4;
+// 2 = sync fields; 3 = status + series metadata fields; 4 = lastReadAt backfill;
+// 5 = links moved off a site's old domain
+const CURRENT_SCHEMA = 5;
+
+const URL_FIELDS = ["chapterUrl", "seriesUrl", "latestChapterUrl"];
+
+// The record with every link on a site's old domain moved to its current one.
+// Returns the same object when nothing changed, so callers can detect a no-op.
+export function withUpgradedUrls(record) {
+  let next = record;
+  for (const field of URL_FIELDS) {
+    const upgraded = upgradeSiteUrl(record[field]);
+    if (upgraded !== record[field]) {
+      if (next === record) next = { ...record };
+      next[field] = upgraded;
+    }
+  }
+  return next;
+}
 
 const SERIES_DEFAULTS = {
   status: "reading",
@@ -87,6 +105,10 @@ function keepKnownMetadata(incoming, existing) {
 //   v4: lastReadAt from updatedAt (their last save) for records saved before
 //       lastReadAt existed. Only on upgrades from v3 or older: imports leave
 //       lastReadAt null on purpose, because the read time is unknown.
+//   v5: links on a site's old domain move to its current one (natomanga.com ->
+//       www.manganami.com). Same paths, so the chapter is unchanged. Not a
+//       user edit: updatedAt and dirty stay as they were, and sync rewrites
+//       old links it pulls the same way (sync.js fromRow).
 export async function migrate() {
   return withLibraryLock(async () => {
     const { [SCHEMA_KEY]: version } = await chrome.storage.local.get(SCHEMA_KEY);
@@ -111,6 +133,7 @@ export async function migrate() {
       if (from < 4 && r.chapter != null && r.lastReadAt == null && r.updatedAt) {
         r = { ...r, lastReadAt: r.updatedAt };
       }
+      if (from < 5) r = withUpgradedUrls(r);
       if (r !== original) {
         map[id] = r;
         migrated++;
@@ -228,7 +251,7 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
         skipped++;
         continue;
       }
-      const record = withUsableChapter(raw);
+      const record = withUsableChapter(withUpgradedUrls(raw));
       const previous = deduped.get(record.id);
       deduped.set(record.id, previous ? preferFurtherRecord(previous, record) : record);
     }
@@ -527,8 +550,10 @@ export async function importRecords(records) {
 
 // Bring a backup record (possibly from an older version) up to the current
 // shape: plan-to-read records keep a null chapter, and legacy records gain the
-// schema v3/v4 fields the same way the migration fills them.
-function normalizeBackupRecord(rec) {
+// schema v3/v4 fields the same way the migration fills them, and links on a
+// site's old domain move to its current one (v5).
+function normalizeBackupRecord(raw) {
+  const rec = withUpgradedUrls(raw);
   const chapter = rec.chapter ?? null;
   return {
     ...SERIES_DEFAULTS,

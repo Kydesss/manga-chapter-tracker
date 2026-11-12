@@ -37,7 +37,7 @@ auth config). Keeping the repo outside a sync folder avoids that entirely.
    comes from the `key` in `manifest.json` and is what makes Google sign-in work, so it
    should be identical on every machine.
 5. Pin the toolbar icon. Open a chapter on a supported site (mangaread.org or
-   natomanga.com) and hit Save.
+   manganami.com, formerly natomanga.com) and hit Save.
 
 After editing any file, return to `chrome://extensions` and click the reload icon on
 the extension card.
