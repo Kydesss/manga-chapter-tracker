@@ -371,6 +371,37 @@ throwing away the foundation it shared with features that are still coming.
 
 ---
 
+## 17. Shipping v0.4.0: review until it's quiet
+
+After dropping MangaRead, the work turned to what was already promised: the full-page
+library, Plan to read that syncs, browser-bookmark import, and the sync gaps earlier
+reviews had found. Each piece followed the same loop: a short design doc, the code, then
+an adversarial review by a second model (Codex, at high effort, in a pane beside the
+work) repeated until a pass came back empty, with every finding fixed by a test that
+fails without it.
+
+The loop paid for itself. The library page's review found that the popup and the page
+each ran their own sync engine, so an Undo could be overwritten in the cloud. It also
+found that the guard against one account's library leaking into another, documented
+since v0.2, had never been built. The cloud schema took nine passes. Most findings were
+the same idea from new angles: a stale chapter coming back after the user deliberately
+moved back or removed a series. The answer was one synced marker (`progressResetAt`) and
+a time that travels with each chapter (`progressAt`) instead of a record's last edit
+time. Two calls were deliberate trade-offs. Older installs stop syncing until they update
+(a hard cutover), because silently undoing a user's move back is worse than a visible
+"Sync failed". The migration was rehearsed on a local Postgres and as a rolled-back dry
+run on production before it ran for real. That dry run corrected an assumption: the
+table held 2,534 rows across two accounts, not the 2 its summary claimed.
+
+Bookmark import added its own lesson. A bookmark's date is evidence of when someone was at
+a chapter, so an old bookmark can't move a series past where the reader since put it.
+
+**Why it mattered.** "Progress is sacred" turned out to be about time as much as chapter
+numbers: which progress counts depends on when it happened relative to the reader's own
+decisions.
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."

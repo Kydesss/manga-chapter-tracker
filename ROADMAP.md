@@ -29,20 +29,13 @@ grows into a small cross-platform service.
 ## Status snapshot
 
 - **Shipped:** local-first MVP (v0.1.x), cloud accounts + cross-device sync (v0.2.x,
-  validated cross-device), and the Shiori brand + design system (v0.3.x).
-- **On `master`, unreleased (targeting v0.4.0):** the `plan`/`reading` status,
-  **Plan to read from a series page**, a shared forward-only bulk write (`bulkUpsert`),
-  storage schema v3-v6 (v5 moved NatoManga links to manganami.com; v6 records the
-  library's owner), the full-page library, account isolation, and storage/sync fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
-  updates**) was removed before release. See
-  [Site bookmark import](#paused-site-bookmark-import).
-- **Shipped to `master`:** cloud schema v2 (PR #8): Plan to read syncs, a server change
-  order for the sync cursor, and a synced progress reset marker
-  ([cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)), applied to the live
-  project on 2026-11-12.
-- **In progress:** browser-bookmark import (Bundle A), on `feat/bookmark-import`
-  ([bookmark-import-plan.md](./docs/bookmark-import-plan.md)). Next in Bundle A:
-  Settings. Site bookmark import is paused with no site planned.
+  validated cross-device), the Shiori brand + design system (v0.3.x), and **v0.4.0**
+  (2026-11-12): the full-page library, Plan to read (synced), browser-bookmark import,
+  account isolation, and cloud schema v2 (server change order for the sync cursor, a
+  synced progress reset marker). See the [changelog](./CHANGELOG.md).
+- **Next:** small fixes (popup Undo, a save shortcut, parser URL variants, the popup
+  footer's width), then Settings to finish Bundle A. Site bookmark import is paused with
+  no site planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
   chapters and series.
 - **Surfaces:** Chrome extension.
@@ -151,7 +144,7 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   page as Plan to read (the parser recognizes series pages), "saving a chapter flips it
   to reading," and the sync rule in `merge.js`. Syncing Plan-to-read records is in
   progress with cloud schema v2 (see Sync hardening).
-- **Bulk import of browser bookmarks** *(in progress, `feat/bookmark-import`; see
+- **Bulk import of browser bookmarks** *(shipped in v0.4.0; see
   [bookmark-import-plan.md](./docs/bookmark-import-plan.md))*. **Import bookmarks** on
   the library page asks for the optional `bookmarks` permission, keeps bookmarks on
   supported sites, and previews what would change before anything is written. It
@@ -271,7 +264,7 @@ found in later reviews.
 - **Account isolation (done, PR #7).** The library records its owner; a different
   account pauses sync and the popup offers Keep separate (libraries parked per account)
   or Merge. See Invariant 5 in `docs/cloud-sync-design.md`.
-- **Cloud schema v2 (in progress, `feat/cloud-schema-v2`).** One migration for the four
+- **Cloud schema v2 (shipped in v0.4.0, PR #8).** One migration for the four
   items marked *(schema v2)* below; see
   [cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md). Applied to the live
   project on 2026-11-12. Older installs can no longer push (a hard cutover) until they

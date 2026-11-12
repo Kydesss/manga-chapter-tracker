@@ -10,16 +10,41 @@ extension's `manifest.json` version field.
 
 ## [Unreleased]
 
-Jonah's `autoscraper` branch, targeting 0.4.0. It's not released yet: `manifest.json`
-stays at 0.3.3. The NatoManga bookmark scraper this branch added has since been removed
-again, before any release; see **Removed before release** below. The entries after it
-record what the branch built. What remains from them is Plan to read, real titles
-through saves and sync, storage schema v3/v4, the storage lock, the sync and merge
-fixes, and the JSON import fixes. The importer's design and pre-merge review stay in
-[docs/natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md) for
-reference.
+## [0.4.0] - 2026-11-12
 
-### Added since the removal
+The management release (Bundle A, minus Settings) and a round of sync hardening. Shiori
+now has a full-page library, Plan to read, browser-bookmark import, separate libraries
+per Google account, and a cloud schema that syncs Plan to read and keeps deliberate moves
+back. Every feature here was reviewed with Codex until a pass found nothing.
+
+**Upgrading**
+- **Signed-in installs must update.** The cloud schema changed on 2026-11-12 (cloud
+  schema v2). Builds from before it get "Sync failed" until they update. Nothing is
+  lost: their changes wait on the device and upload after updating.
+- The first sync after updating pulls your whole library once.
+- Storage moves from schema v2 to v7 on first run, in one write. Links on natomanga.com
+  move to manganami.com, and the library records which account it syncs with.
+- One new permission, **optional**: `bookmarks`, requested only when you click
+  **Import bookmarks**.
+
+### Highlights
+- **Full-page library** (the Library link in the popup, also the options page): status
+  tabs, site filter, search, sorts, Continue/Series, and Remove with Undo.
+- **Plan to read**: save a series page before reading it; saving a chapter starts it.
+  Plan-to-read series sync across devices.
+- **Import browser bookmarks**, with a preview of what would change.
+- **Account isolation**: signing in as a different Google account pauses sync and asks
+  you to keep the libraries separate or merge them.
+- **Moving back on purpose sticks**: saving an earlier chapter from the popup (after its
+  warning) is kept by sync, and a device that missed a removal can't revive it.
+- **Sync follows the server's clock** instead of each device's, so a device with a fast
+  clock can't make others miss changes.
+- **NatoManga moved to manganami.com**; saved links are updated automatically.
+
+The detailed entries follow. The NatoManga bookmark scraper that the `autoscraper` branch
+built was removed before this release; its history is kept at the end of this entry.
+
+### Added
 - **Import browser bookmarks** (Bundle A; see
   [docs/bookmark-import-plan.md](./docs/bookmark-import-plan.md)). **Import bookmarks**
   in the library page's header (and in its empty state) asks for Chrome's `bookmarks`
@@ -91,7 +116,8 @@ reference.
   "Extra". An imported chapter only counts if it's a number with a usable http(s) link;
   anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
   replaces a working link or advances a series, and a new or restored series sent that
-  way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
+  way arrives as Plan to read, so it can still advance later. Bookmark import is its
+  first caller.
 - **Cloud schema v2** (migration in `supabase/migrations/`, applied to the live project
   on 2026-11-12;
   see [docs/cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)):
@@ -125,7 +151,7 @@ reference.
     they update.
 - Tests: 31 → 177 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, cross-context sync, account isolation, and cloud schema v2 against a fake of the migrated table).
 
-### Fixed since the removal
+### Fixed
 - **Cloud timestamps no longer look changed on every pull.** Postgres returns
   `...123+00:00` where the extension writes `...123Z`, so the same moment never compared
   equal, and every pulled row was uploaded again once. Pulled timestamps are now
@@ -145,7 +171,7 @@ reference.
   had claimed this guard since v0.2; it was never built. Reviewed with Codex over four
   passes.
 
-### Changed since the removal
+### Changed
 - **NatoManga moved to manganami.com.** natomanga.com now permanently redirects to
   `www.manganami.com` with the same paths, so saved NatoManga links went through a
   redirect. Saving now works on manganami.com, and old natomanga.com links still parse.
@@ -164,7 +190,16 @@ reference.
 - **The MangaRead importer is off the roadmap.** Site bookmark import is paused with no
   site planned. The research stays in `docs/mangaread-bookmark-import-plan.md`.
 
-### Removed before release
+### History: the `autoscraper` branch (before this release)
+
+Jonah's branch added a NatoManga bookmark scraper, then it was removed again before any
+release. What remains from it is Plan to read, real titles through saves and sync,
+storage schema v3/v4, the storage lock, the sync and merge fixes, and the JSON import
+fixes. The importer's design and pre-merge review stay in
+[docs/natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md).
+The entries below record what the branch built and then removed.
+
+#### Removed before release
 - **The NatoManga scraper.** Gone: **Save bookmarks**, **Refresh updates**, the
   series-page metadata pass, and the service worker's import job (`background.js` is back
   to running sign-in only). `natomanga.js`, its fixtures, and its tests are deleted.
@@ -180,7 +215,7 @@ reference.
 - A leftover import job in `chrome.storage.local` is cleared on install or update.
 - Tests: 58 → 31 (the scraper, import-job, manifest-rule, and bulk-import tests).
 
-### Added
+#### Added
 - **NatoManga bookmark import ("Save bookmarks").** On any natomanga.com page, the popup
   shows a **Save bookmarks** button. One press imports every page of your NatoManga
   bookmarks into the library, using the NatoManga session already signed in on that tab.
@@ -215,7 +250,7 @@ reference.
   chapters and fill in missing covers. It's manual on purpose. Scheduled background
   checks wait until the parser has been validated on the live site.
 
-### Changed
+#### Changed
 - **Storage schema v3 and v4.** Every record gets a `status` and fields for covers and
   update tracking: `lastReadAt`, `coverUrl`, `latestChapter`, `latestChapterUrl`,
   `latestPublishedAt`, and `metadataCheckedAt`. A one-time migration fills them in on
@@ -247,7 +282,7 @@ reference.
   latest chapter doesn't bump a record's `updatedAt` or queue a sync. A Supabase
   migration will follow.
 
-### Fixed
+#### Fixed
 - **Migrations now run for local-only users.** Before, the schema migration ran only
   during a sync, which never happens when you're signed out. The popup now runs it when
   it opens, before any reads or syncing.
@@ -255,7 +290,7 @@ reference.
   series again while a sync was pushing it, the newer save could be marked as synced
   and never uploaded. It now stays queued for the next sync.
 
-### Internal
+#### Internal
 - `natomanga.js`: a NatoManga bookmark-page parser with no dependencies. Its pure
   functions turn HTML strings into records, keep the selectors and labels in one place,
   and report a diagnostic for each card they can't read. It also reads covers, latest
@@ -276,7 +311,7 @@ reference.
     tab.
   - The manifest's cover-image referrer rule.
 
-### Docs
+#### Docs
 - Pre-merge review of the branch added to the NatoManga plan. All four blockers and the
   follow-up bugs are fixed, and post-merge notes cover Jonah's covers, badges, and
   Refresh updates work. New
