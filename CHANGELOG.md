@@ -10,6 +10,30 @@ extension's `manifest.json` version field.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
+The extensibility release (Bundle B, part 1). Shiori is no longer limited to the sites
+built into it: add any site whose chapter addresses carry the series and chapter number,
+and the popup, the new save shortcut and bookmark import all recognize it. Plus a round
+of polish: Undo in the popup, more chapter URLs, and keyboard fixes. Both features were
+reviewed with Codex until a pass found nothing.
+
+**Upgrading**
+- Nothing to do: no storage migration, no cloud change, no new permissions.
+- The save shortcut is Alt+Shift+S if nothing else uses it; otherwise set one at
+  `chrome://extensions/shortcuts`.
+- Sites you add are stored with Chrome's own settings sync, so they reach your other
+  computers through Chrome, not your Shiori account.
+
+### Highlights
+- **Add your own sites** in the library page's new **Settings**, with a live address
+  test. The popup offers **Add this site** on pages it doesn't recognize.
+- **Save the chapter you're on with a shortcut** (Alt+Shift+S). It never moves a series
+  back.
+- **Undo for the popup's Remove.**
+- **More chapter URLs recognized:** page numbers (`/chapter-100/2`) and volume prefixes
+  (`vol-2-chapter-5`), with "Go to your saved page" within a chapter.
+
 ### Added
 - **Add your own sites.** The library page now has **Settings** (also at
   `library.html#settings`), and its first section, **Sites**, lets you add any site whose
@@ -54,7 +78,7 @@ extension's `manifest.json` version field.
   The saved link keeps the page, so Continue returns to it. Query strings and anchors
   already worked and are now covered by tests.
 - **Replacing a message whose Undo had focus** moves focus to the search box instead of
-  losing it (popup and library page).
+  losing it (popup and library page; in Settings, to the Settings button).
 
 ### Fixed
 - **Removing from the popup with the keyboard opened the series instead.** Enter or
@@ -63,8 +87,9 @@ extension's `manifest.json` version field.
 - **A long email made the popup 1px too wide**, adding a horizontal scrollbar. The
   footer's sign-in side now gives way: "Synced: …" truncates, with the full text in its
   tooltip.
-- Tests: 177 → 194 (parser URL variants, the shortcut's decisions, and the service
-  worker's shortcut handler against a fake `chrome`).
+- Tests: 177 → 230 (parser URL variants, the shortcut's decisions, the service worker's
+  shortcut handler against a fake `chrome`, and custom sites: the pattern compiler,
+  settings validation and storage, labels, and import).
 
 ## [0.4.0] - 2026-11-12
 
