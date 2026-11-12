@@ -4,8 +4,10 @@
 // handles I/O, ordering, batching, the lock, and the cursor.
 //
 // Order of a pass is PULL -> MERGE -> PUSH. Pulling first means we incorporate
-// remote progress (furthest chapter) before sending anything, so we never blindly
-// overwrite a further chapter that another device wrote.
+// remote progress (furthest chapter) before sending anything. Pushes are also
+// conditional (push_series): a row is only overwritten if the cloud still holds
+// the version this device last saw, so a device that pushes between our pull
+// and our push isn't overwritten; we fetch, merge and push again instead.
 
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
 import { getSession, getUserEmail, refreshSession } from "./auth.js";
@@ -27,6 +29,11 @@ import {
 } from "./storage.js";
 
 const REST = `${SUPABASE_URL}/rest/v1/series`;
+const PUSH_RPC = `${SUPABASE_URL}/rest/v1/rpc/push_series`;
+// Rounds of push -> fetch rejected rows -> merge -> push again, per pass.
+// Anything still rejected stays dirty for the next pass.
+const PUSH_ROUNDS = 3;
+const FETCH_IDS_BATCH = 50; // ids per by-id fetch, keeping URLs short
 const PUSH_BATCH = 500;
 const PULL_PAGE = 1000;
 const THROTTLE_MS = 30000;
@@ -79,6 +86,13 @@ function toRow(rec, userId) {
   };
 }
 
+// A row for push_series: the same columns (user_id is the server's
+// auth.uid()), plus the version of the cloud row this push replaces.
+function toPushRow(rec, userId) {
+  const { user_id: _ignored, ...row } = toRow(rec, userId);
+  return { ...row, base_synced_at: typeof rec.cloudSyncedAt === "string" ? rec.cloudSyncedAt : null };
+}
+
 // An optional timestamp Postgres will accept, or null. A value that doesn't
 // parse would fail the whole upload batch, every pass. (Storage clears these
 // on upgrade and import; this is the backstop.)
@@ -126,6 +140,9 @@ export function fromRow(row) {
     createdAt: iso(row.created_at),
     updatedAt,
     deleted: !!row.deleted,
+    // The server's version of this row, kept exactly as sent (it's only ever
+    // handed back to the server, as a push's base). Local only: never content.
+    cloudSyncedAt: typeof row.synced_at === "string" ? row.synced_at : null,
   };
 }
 
@@ -223,7 +240,52 @@ async function getRows(query, userId) {
   return res.json();
 }
 
+// Rows by id, whatever their synced_at: the current cloud version of rows a
+// push was refused for. Not bounded by the cursor, so a stale or wrong base
+// (an old row, a restored backup) still finds what's there.
+async function fetchByIds(ids, userId) {
+  const rows = [];
+  for (let i = 0; i < ids.length; i += FETCH_IDS_BATCH) {
+    const list = ids.slice(i, i + FETCH_IDS_BATCH).map((id) => JSON.stringify(id)).join(",");
+    rows.push(...(await getRows(`select=*&id=${encodeURIComponent(`in.(${list})`)}`, userId)));
+  }
+  return rows;
+}
+
+// Push records. Returns { accepted: Map(id -> new synced_at, or null when the
+// server didn't say), rejected: [ids] }. Uses push_series, which only replaces
+// a row the device last saw (docs/sync-hardening-plan.md); where the function
+// doesn't exist yet (the migration not applied), falls back to the plain
+// upsert, which accepts everything.
 async function push(records, userId) {
+  const accepted = new Map();
+  const rejected = [];
+  for (let i = 0; i < records.length; i += PUSH_BATCH) {
+    const batch = records.slice(i, i + PUSH_BATCH);
+    const res = await authedFetch(PUSH_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: batch.map((r) => toPushRow(r, userId)) }),
+    }, userId);
+    if (res.status === 404) {
+      const text = await res.text();
+      if (!/PGRST202|push_series/.test(text)) throw new Error(`Push failed (404): ${text}`);
+      for (const id of await legacyPush(batch, userId)) accepted.set(id, null);
+      continue;
+    }
+    if (!res.ok) throw new Error(`Push failed (${res.status}): ${await res.text()}`);
+    const out = await res.json();
+    const got = new Map((Array.isArray(out) ? out : []).map((r) => [r.id, r.synced_at ?? null]));
+    for (const rec of batch) {
+      if (got.has(rec.id)) accepted.set(rec.id, got.get(rec.id));
+      else rejected.push(rec.id);
+    }
+  }
+  return { accepted, rejected };
+}
+
+// The pre-push_series upload: an unconditional upsert.
+async function legacyPush(records, userId) {
   const ids = [];
   for (let i = 0; i < records.length; i += PUSH_BATCH) {
     const batch = records.slice(i, i + PUSH_BATCH).map((r) => toRow(r, userId));
@@ -317,9 +379,21 @@ async function passOnce() {
     const pushRecords = (firstTime ? all : all.filter((r) => r.dirty)).filter(
       isCloudCompatible
     );
-    const pushedIds = await push(pushRecords, userId);
-    // Records edited while the push was in flight stay dirty for the next pass.
-    await markSynced(pushRecords);
+    // A row the cloud changed since we last saw it is refused rather than
+    // overwritten: fetch those rows, merge them like any pull, and push what
+    // still differs. A few rounds per pass; the rest waits for the next pass.
+    let toPush = pushRecords;
+    let pushedCount = 0;
+    for (let round = 0; round < PUSH_ROUNDS && toPush.length; round++) {
+      const { accepted, rejected } = await push(toPush, userId);
+      pushedCount += accepted.size;
+      // Records edited while the push was in flight stay dirty for the next pass.
+      await markSynced(toPush.filter((r) => accepted.has(r.id)), accepted);
+      if (!rejected.length) break;
+      const current = (await fetchByIds(rejected, userId)).map(fromRow);
+      const merged = await updateMap((localMap) => mergeRemoteIntoLocal(localMap, current).next);
+      toPush = rejected.map((id) => merged[id]).filter((r) => r?.dirty && isCloudCompatible(r));
+    }
 
     // 4. Advance the cursor to the pull's watermark. synced_at is set by the
     //    server, so a device's clock can't move it. Our own pushes don't move
@@ -330,7 +404,7 @@ async function passOnce() {
     return {
       ok: true,
       pulled: rows.length,
-      pushed: pushedIds.length,
+      pushed: pushedCount,
       total: all.filter((r) => !r.deleted).length,
     };
   } catch (err) {

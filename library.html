@@ -140,6 +140,24 @@
       </div>
     </dialog>
 
+    <!-- Set chapter (docs/sync-hardening-plan.md). Nothing is saved until the
+         button is pressed; Esc or Cancel closes it. -->
+    <dialog id="chapterDialog" class="import-dialog chapter-dialog" aria-labelledby="chapterTitle" aria-describedby="chapterCurrent">
+      <form id="chapterForm" class="import-body" novalidate>
+        <h2 id="chapterTitle" class="import-title">Set chapter</h2>
+        <p id="chapterCurrent" class="import-summary"></p>
+        <div class="field">
+          <label for="chapterInput">Chapter number or link</label>
+          <input id="chapterInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="45, 45.5, or the chapter's link" aria-describedby="chapterResult" />
+          <p id="chapterResult" class="test-result" aria-live="polite"></p>
+        </div>
+        <div class="import-actions">
+          <button id="chapterCancel" type="button" class="btn">Cancel</button>
+          <button id="chapterSave" type="submit" class="btn primary" disabled>Set chapter</button>
+        </div>
+      </form>
+    </dialog>
+
     <!-- Confirmation messages, with an optional action (Undo). -->
     <div id="toast" class="toast" role="status" aria-live="polite" hidden>
       <span id="toastText"></span>

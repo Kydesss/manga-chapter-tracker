@@ -736,6 +736,15 @@ body.is-settings .library-only {
   color: var(--success);
 }
 
+/* Set chapter: a move back is spelled out, in the body colour. */
+.test-result.is-back {
+  color: var(--text);
+}
+
+.chapter-dialog {
+  width: min(460px, calc(100% - 32px));
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;

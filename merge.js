@@ -217,9 +217,15 @@ export function mergeRemoteIntoLocal(localMap, remoteRecords) {
 
     const merged = resolveConflict(local, remote);
     merged.dirty = !sameSyncContent(merged, remote); // cloud needs it?
+    // The cloud version we've now seen: the base for our next push of this row.
+    merged.cloudSyncedAt = remote.cloudSyncedAt ?? local.cloudSyncedAt ?? null;
 
     // Only record a change if the local value actually moved.
-    if (!sameSyncContent(merged, local) || merged.dirty !== (local.dirty === true)) {
+    if (
+      !sameSyncContent(merged, local) ||
+      merged.dirty !== (local.dirty === true) ||
+      merged.cloudSyncedAt !== (local.cloudSyncedAt ?? null)
+    ) {
       next[remote.id] = merged;
       changedIds.push(remote.id);
     }

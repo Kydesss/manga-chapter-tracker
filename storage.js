@@ -317,6 +317,15 @@ export async function getOne(id) {
   return r && !r.deleted ? r : null;
 }
 
+// One series as a page shows it, plus the library it came from: { record,
+// epoch }, record null if not saved (or removed). A page that saves from what
+// it showed hands both back to saveChecked.
+export async function getOneWithEpoch(id) {
+  const r = await chrome.storage.local.get([KEY, EPOCH_KEY]);
+  const rec = (r[KEY] || {})[id];
+  return { record: rec && !rec.deleted ? rec : null, epoch: r[EPOCH_KEY] || "initial" };
+}
+
 // Records with unpushed local changes (for the sync push step).
 export async function getDirty() {
   const map = await readMap();
@@ -372,11 +381,41 @@ export async function saveIfAllowed(record, decide) {
   });
 }
 
+// Save from what a page showed (the popup's Save, the library's Set chapter).
+// The page decided what the save means (advance, move back, plan) from the
+// series it drew; this writes only if, under the lock, that's still true:
+//   epoch          the library the page showed (getLibrary / getOneWithEpoch)
+//   seenUpdatedAt  the series' updatedAt as shown, or null for "not saved"
+//   seenRecord     the displayed record, also checked because a merge can
+//                  change progress while preserving updatedAt
+// Otherwise nothing is written and it returns { stale: "library" } (a switch
+// or merge replaced the library) or { stale: "changed", current } (another
+// save, a sync or a removal changed the series), so the page can redraw and
+// ask again. On success: { saved }. See docs/sync-hardening-plan.md.
+export async function saveChecked(record, { epoch, seenUpdatedAt = null, seenRecord, resetProgress = false } = {}) {
+  return withLibraryLock(async () => {
+    if (epoch !== undefined && epoch !== (await readEpoch())) return { stale: "library" };
+    const map = await readMap();
+    const stored = map[record.id];
+    const current = stored && !stored.deleted ? stored : null;
+    if ((current?.updatedAt ?? null) !== (seenUpdatedAt ?? null)) return { stale: "changed", current };
+    if (seenRecord !== undefined && (current === null || seenRecord === null
+      ? current !== seenRecord
+      : !sameSyncContent(current, seenRecord))) return { stale: "changed", current };
+    const saved = applySave(map, record, { resetProgress });
+    if (saved !== stored) await writeMap(map);
+    return { saved };
+  });
+}
+
 // The body of a save, applied to `map` in place (the caller holds the lock
 // and writes). Returns the series as saved, or the existing one unchanged for
 // a Plan-to-read save on a series being read.
 function applySave(map, record, { resetProgress = false } = {}) {
   const existing = map[record.id];
+  // A page may hold an older cloud base even when the displayed content still
+  // matches. Only a pull or an accepted upload can advance this local marker.
+  const { cloudSyncedAt: _pageBase, ...content } = record;
   if (!hasChapter(record.chapter) && existing && !existing.deleted && hasChapter(existing.chapter)) {
     return existing;
   }
@@ -387,7 +426,7 @@ function applySave(map, record, { resetProgress = false } = {}) {
     map[record.id] = {
       ...SERIES_DEFAULTS,
       ...existing,
-      ...record,
+      ...content,
       title: pickTitle(record, existing),
       ...keepKnownMetadata(record, existing),
       status: record.chapter == null ? record.status || "plan" : "reading",
@@ -865,15 +904,22 @@ export async function updateMap(transform) {
 // record still holds exactly what was pushed. Comparing updatedAt alone isn't
 // enough: a JSON import can raise the chapter while keeping the timestamp (the
 // merge keeps the newer of the two), and that change must still be pushed.
-export async function markSynced(pushed) {
+// After a push: clear `dirty` on records unchanged since they were sent, and
+// record the cloud version each now matches (`syncedAt`: id -> the server's
+// new synced_at, from push_series), the base for the next conditional push.
+// A record edited mid-push stays dirty, on top of the version it was sent as.
+export async function markSynced(pushed, syncedAt = null) {
   if (!pushed?.length) return;
   return withLibraryLock(async () => {
     const map = await readMap();
     for (const sent of pushed) {
       const current = map[sent.id];
-      if (current && sameSyncContent(current, sent)) {
-        map[sent.id] = { ...current, dirty: false };
-      }
+      if (!current) continue;
+      const base = syncedAt?.get(sent.id);
+      const next = { ...current };
+      if (typeof base === "string") next.cloudSyncedAt = base;
+      if (sameSyncContent(current, sent)) next.dirty = false;
+      map[sent.id] = next;
     }
     await writeMap(map);
   });
@@ -1004,10 +1050,13 @@ export async function adoptLibrary(user, { epoch } = {}) {
     const map = await readMap();
     // The other account's history stays with it: its removals are dropped,
     // and so are its reset markers, which would otherwise disqualify this
-    // account's own further progress on the same series.
+    // account's own further progress on the same series. Its cloud versions
+    // (cloudSyncedAt) were the other account's rows: no base for this one.
     for (const id of Object.keys(map)) {
       if (map[id].deleted) delete map[id];
-      else if (map[id].progressResetAt) map[id] = { ...map[id], progressResetAt: null };
+      else if (map[id].progressResetAt || map[id].cloudSyncedAt) {
+        map[id] = { ...map[id], progressResetAt: null, cloudSyncedAt: null };
+      }
     }
     const { [PARKED_KEY]: stored } = await chrome.storage.local.get(PARKED_KEY);
     const parked = { ...(stored || {}) };
@@ -1114,7 +1163,9 @@ export async function importRecords(records) {
         skipped++;
         continue;
       }
-      const rec = normalizeBackupRecord(raw);
+      // A backup's cloud versions may be another account's or long stale; the
+      // stored record's (if any) is the one that matches this library's cloud.
+      const { cloudSyncedAt: _fromBackup, ...rec } = normalizeBackupRecord(raw);
       const existing = map[rec.id];
       if (!existing) {
         map[rec.id] = { ...rec, dirty: true };
@@ -1126,7 +1177,7 @@ export async function importRecords(records) {
         skipped++;
         continue;
       }
-      map[rec.id] = { ...merged, dirty: true };
+      map[rec.id] = { ...merged, cloudSyncedAt: existing.cloudSyncedAt ?? null, dirty: true };
       updated++;
     }
 

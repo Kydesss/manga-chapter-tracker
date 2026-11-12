@@ -41,6 +41,8 @@ const builtinMatchers = {
   matchChapter: (path) => path.match(CHAPTER_RE)?.groups || null,
   matchSeries: (path) => path.match(SERIES_RE)?.groups || null,
   seriesPath: (slug) => `/manga/${slug}`,
+  // Both built-in sites write a decimal chapter with a dash: 83.2 -> chapter-83-2.
+  chapterPath: (slug, chapter) => `/manga/${slug}/chapter-${chapter.replace(".", "-")}`,
 };
 
 const BUILTIN_SITES = [
@@ -193,6 +195,14 @@ export function compileSite(def) {
   const series = compilePattern(def.seriesPattern, "series");
   if (!chapter.ok || !series.ok) return null;
   const seriesSource = series.source.replace(/\/+$/, "");
+  const chapterSource = chapter.source.replace(/\/+$/, "");
+  // A chapter link can be built from the pattern only if nothing in it is
+  // unknown (no *), and only for whole numbers: how the site writes a decimal
+  // chapter isn't known.
+  const chapterPath = chapterSource.includes("*")
+    ? null
+    : (slug, ch) =>
+        /^[0-9]+$/.test(ch) ? chapterSource.replace("{slug}", () => slug).replace("{chapter}", () => ch) : null;
   return {
     id,
     host: host.toLowerCase(),
@@ -201,6 +211,7 @@ export function compileSite(def) {
     matchChapter: (path) => matchSegments(chapter.segments, path),
     matchSeries: (path) => matchSegments(series.segments, path),
     seriesPath: (slug) => seriesSource.replace("{slug}", () => slug),
+    chapterPath,
   };
 }
 
@@ -371,6 +382,32 @@ export function parseSeriesUrl(rawUrl, sites = BUILTIN_SITES) {
 // or null for anything else.
 export function parsePageUrl(rawUrl, sites = BUILTIN_SITES) {
   return parseChapterUrl(rawUrl, sites) || parseSeriesUrl(rawUrl, sites);
+}
+
+// A chapter label as typed ("45", "45.5", "45-5") in the parser's form
+// ("45.5"), or null if it isn't a chapter number.
+export function chapterNumberLabel(input) {
+  const m = typeof input === "string" ? input.trim().match(/^([0-9]+)(?:[.-]([0-9]+))?$/) : null;
+  return m ? (m[2] ? `${m[1]}.${m[2]}` : m[1]) : null;
+}
+
+// The link to chapter `chapter` (a label like "45.5") of a saved series, built
+// from its site's chapter shape, or null when it can't be built (an unknown
+// site, a pattern with *, a decimal on a custom site). A built link must parse
+// back to this same series and chapter, or it isn't returned.
+export function chapterLinkFor(record, chapter, sites = BUILTIN_SITES) {
+  const site = sites.find((s) => s.id === record?.site);
+  if (!site?.chapterPath || typeof record.slug !== "string" || typeof chapter !== "string") return null;
+  let origin;
+  try {
+    origin = new URL(record.seriesUrl).origin;
+  } catch {
+    return null;
+  }
+  const path = site.chapterPath(record.slug, chapter);
+  if (!path) return null;
+  const parsed = parseChapterUrl(origin + path, sites);
+  return parsed && parsed.id === record.id && parsed.chapter === chapter ? parsed.chapterUrl : null;
 }
 
 // The host part of a page URL as Settings would store it (lowercase, no

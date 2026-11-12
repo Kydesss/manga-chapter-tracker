@@ -10,6 +10,29 @@ extension's `manifest.json` version field.
 
 ## [Unreleased]
 
+### Added
+- **Set chapter** on each library row: enter a chapter number or paste its link.
+  Moving back is explicit and sync preserves the chosen chapter. Built-in sites
+  support decimal numbers; custom sites request a link when one cannot be built.
+
+### Fixed
+- Popup saves and Set chapter refuse an account switch or a changed series while
+  the page was open, then show the current state for confirmation. They compare
+  the displayed sync fields as well as the timestamp, so merges that keep the same
+  edit time cannot silently overwrite further progress.
+- Uploads use the cloud version last seen by this device. Conflicting uploads are
+  fetched, merged and retried up to three times; unresolved changes stay dirty.
+  Uses `push_series` (`20261112220336_push_series.sql`, applied 2026-11-12); a build
+  that can't find it falls back to the previous upload. Older extension versions keep
+  syncing unchanged (no cutover).
+- Set chapter retains keyboard focus when a dialog is quickly closed and reopened.
+
+### Database
+- New `push_series` function uses invoker permissions and the authenticated user's
+  id. RLS policies evaluate `auth.uid()` once per query. Rehearsed on a local
+  Postgres (21 checks) and as a rolled-back dry run on production, then applied to the
+  live project on 2026-11-12.
+
 ## [0.5.0] - 2026-11-12
 
 The extensibility release (Bundle B, part 1). Shiori is no longer limited to the sites

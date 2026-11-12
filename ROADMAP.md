@@ -36,8 +36,10 @@ grows into a small cross-platform service.
   (add any site by address and URL patterns,
   [custom-sites-plan.md](./docs/custom-sites-plan.md)), a save shortcut, popup Undo, and
   more chapter URLs. See the [changelog](./CHANGELOG.md).
-- **Next:** sync hardening (the popup's Save checking for an account switch, Set current
-  chapter on the library page, the concurrent-upload race), then save reminders (the rest
+- **In review (PR #14):** sync hardening (checked popup saves, Set chapter on the library
+  page, conditional uploads). Its migration, `push_series`, was applied to the live
+  project on 2026-11-12. See [the plan](./docs/sync-hardening-plan.md).
+- **Next:** save reminders (the rest
   of Bundle B) and the rest of Settings. Site bookmark import is paused with no site
   planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) built in, plus
@@ -285,28 +287,25 @@ found in later reviews.
   changes from other devices are skipped until real time catches up. Fix: a
   server-assigned `synced_at` for the cursor, keeping `updated_at` for conflict
   resolution.
-- **Concurrent uploads can briefly overwrite each other.** A push is an unconditional
+- **Concurrent uploads (done; migration applied 2026-11-12).** A push was an unconditional
   upsert, so if device A pulls chapter 40, device B pushes 50, and A's push of 41 lands
   last, the cloud holds 41 until B's next pass merges and pushes 50 again. It converges
   (furthest chapter wins), but other devices can see the lower chapter in between.
-  Fix: a conditional write (an RPC that merges server-side, or an `updated_at` /
-  `synced_at` precondition). Found in Codex review of cloud schema v2; predates it.
-- The popup's Save doesn't check the library epoch: a save made from a popup drawn
-  before an account switch lands in the new account's library. The keyboard shortcut
-  decides and saves under the lock, and Remove/Undo check the epoch; Save should too.
-  Found in Codex review of the polish batch; predates it.
-- RLS policies call `auth.uid()` per row; Supabase's advisor suggests
-  `(select auth.uid())` so it's evaluated once per query. A small performance change.
+  `push_series` now checks the last observed `synced_at`, with client merge and retry
+  on conflict. A build that can't find the function falls back to the old upload, and
+  older installs keep using it, so the race remains only between older installs.
+- **Checked popup saves (implemented).** Save checks the library epoch and displayed
+  sync content under the write lock. An account switch or changed series redraws
+  instead of applying an old decision.
+- **RLS policy evaluation (done; migration applied 2026-11-12).** The migration uses
+  `(select auth.uid())` so it is evaluated once per query.
 - Tombstone purge (hard-delete old soft-deletes).
 - Fuller multi-account handling beyond Keep separate: a way to see or export a parked
   library without signing in as its account, and to recover a library whose owner was
   unknown at upgrade.
 - "Resolved N differences" indicator after a conflict.
-- "Set current chapter" override to intentionally move to an earlier chapter *(schema
-  v2: from the chapter page)*. Saving an earlier chapter from the popup, after its "This
-  would move you back" warning, now sets the reset marker below, so sync keeps it. Still
-  to do: a Set current chapter action in the library page, which needs a safe way to get
-  the chapter's link.
+- **Set chapter (implemented).** Each library row accepts a chapter number or a
+  same-series chapter link, warns before a move back, and sets the synced reset marker.
 - **One synced reset marker: `progressResetAt`** *(schema v2)*. Proposed while planning
   the library page. Sync's furthest-chapter rule means a deliberate backward move (Set current
   chapter, or saving an earlier chapter from the popup while signed in) is undone by the
