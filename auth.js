@@ -8,7 +8,7 @@
 
 import { SUPABASE_URL, SUPABASE_KEY, GOOGLE_CLIENT_ID } from "./config.js";
 
-const SESSION_KEY = "supabase_session";
+export const SESSION_KEY = "supabase_session";
 
 // --- Public API -----------------------------------------------------------
 

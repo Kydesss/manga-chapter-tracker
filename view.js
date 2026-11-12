@@ -3,6 +3,19 @@
 // sorting, summary counts, and small display helpers. No chrome.*, no DOM
 // state, so it's unit-tested directly (tests/view.test.js).
 
+// Stored records are partly untrusted: a JSON import only validates the
+// required fields, so optional ones (siteName, createdAt, lastReadAt) can be
+// any type. These helpers treat a non-string as missing instead of throwing,
+// so one malformed record can't stop the library from rendering.
+const text = (v) => (typeof v === "string" ? v : "");
+const isoOrEmpty = (v) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : "");
+
+// The site name to show for a record: its stored name if that's a string,
+// else its site id. Never interpolate r.siteName directly; it may be any type.
+export function siteLabel(record) {
+  return text(record?.siteName) || text(record?.site);
+}
+
 // A series with no chapter is Plan to read; anything with one is reading.
 export function isPlan(record) {
   return record.chapter == null || record.chapter === "";
@@ -17,12 +30,12 @@ export function filterSeries(records, { query = "", status = "all", site = "all"
     if (status === "plan" && !isPlan(r)) return false;
     if (status === "reading" && isPlan(r)) return false;
     if (site !== "all" && r.site !== site) return false;
-    if (q && !String(r.title || "").toLowerCase().includes(q)) return false;
+    if (q && !text(r.title).toLowerCase().includes(q)) return false;
     return true;
   });
 }
 
-const byTitle = (a, b) => String(a.title || "").localeCompare(String(b.title || ""));
+const byTitle = (a, b) => text(a.title).localeCompare(text(b.title));
 
 // Sort a copy: "recent" (last read first), "title" (A-Z), or "added" (newest
 // first). Series with no known read time (plan to read, or imported without
@@ -33,11 +46,11 @@ export function sortSeries(records, sort = "recent") {
   if (sort === "title") return list.sort(byTitle);
   if (sort === "added") {
     return list.sort(
-      (a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || byTitle(a, b)
+      (a, b) => isoOrEmpty(b.createdAt).localeCompare(isoOrEmpty(a.createdAt)) || byTitle(a, b)
     );
   }
   return list.sort(
-    (a, b) => (b.lastReadAt || "").localeCompare(a.lastReadAt || "") || byTitle(a, b)
+    (a, b) => isoOrEmpty(b.lastReadAt).localeCompare(isoOrEmpty(a.lastReadAt)) || byTitle(a, b)
   );
 }
 
@@ -61,8 +74,8 @@ export function summarize(records) {
 export function sitesIn(records) {
   const seen = new Map();
   for (const r of records) {
-    if (r.deleted || !r.site || seen.has(r.site)) continue;
-    seen.set(r.site, r.siteName || r.site);
+    if (r.deleted || typeof r.site !== "string" || !r.site || seen.has(r.site)) continue;
+    seen.set(r.site, text(r.siteName) || r.site);
   }
   return [...seen].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -91,7 +104,7 @@ export function compareChapters(a, b) {
 
 // Compact relative time for the "last read" line, e.g. "just now", "3d ago".
 export function relativeTime(iso, now = Date.now()) {
-  if (!iso) return "";
+  if (typeof iso !== "string" || !iso) return "";
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
   const s = Math.max(0, Math.floor((now - then) / 1000));
@@ -104,9 +117,37 @@ export function relativeTime(iso, now = Date.now()) {
   if (d < 7) return `${d}d ago`;
   const w = Math.floor(d / 7);
   if (w < 5) return `${w}w ago`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
+  if (d < 365) return `${Math.max(1, Math.floor(d / 30))}mo ago`;
   return `${Math.floor(d / 365)}y ago`;
+}
+
+// Orders the results of overlapping async requests (sync passes) so that only
+// the newest one shows. begin() numbers a request; end() marks it finished.
+// A result may be shown (accept) only if no newer request is still running and
+// no newer result was already shown; shown() records that it was.
+export function createResultGate() {
+  const pending = new Set();
+  let last = 0;
+  let applied = 0;
+  return {
+    begin() {
+      const seq = ++last;
+      pending.add(seq);
+      return seq;
+    },
+    end(seq) {
+      pending.delete(seq);
+    },
+    accept(seq) {
+      return seq >= applied && ![...pending].some((p) => p > seq);
+    },
+    shown(seq) {
+      applied = Math.max(applied, seq);
+    },
+    idle() {
+      return pending.size === 0;
+    },
+  };
 }
 
 export function escapeHtml(str) {

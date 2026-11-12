@@ -25,9 +25,12 @@ reference.
   Reading / Plan to read), a site filter (shown when the library spans more than one
   site), search, and sorts (Recently read, Title, Recently added), plus a summary line.
   Each row has **Continue** (or **Start** for a plan), a read-only jump to your saved
-  place; **Series**; and **Remove** with **Undo**. The page updates live when the library
-  changes, keeps keyboard focus as the virtualized list scrolls, and works in light and
-  dark and down to phone width. No new permissions. Design and the reasoning for
+  place; **Series**; and **Remove** with **Undo**, which has no time limit: it stays until
+  used, dismissed (× or Esc), or replaced by the next removal. The page updates live when the library changes, follows signing in and out in
+  the popup, syncs when the connection returns or the tab is revisited, keeps keyboard
+  focus on its row even when the row scrolls out of the rendered window, gives each row
+  its position in the list for screen readers, and works in light and dark and down to
+  phone width. No new permissions. Design and the reasoning for
   deferring "Set current chapter": `docs/library-page-plan.md`.
 - **Undo for Remove** in storage: `remove(id)` now returns the series as it was, and
   `restore(id, previous)` brings it back. If a sync rewrote the tombstone or a save brought
@@ -35,6 +38,17 @@ reference.
   so Undo never leaves a series lower than when it was removed. Removes and restores are
   stamped strictly later than the record they replace, so device clock drift can't make
   them lose a merge. (The popup's Remove doesn't offer Undo yet.)
+- **Sync passes are serialized across the popup and the library.** Each page imports the
+  sync engine, so each had its own; a stalled upload from one could overwrite a newer
+  change (an Undo) that the other had already pushed. Whole passes now run under a shared
+  Web Lock (`shiori-sync`). A sync requested mid-pass now waits for and reports the
+  follow-up pass, instead of returning "skipped" while the change was still unsent.
+- **Saves are monotonic too.** A popup save is never stamped earlier than the record it
+  replaces, so a record dated ahead of this device's clock can't make it lose a merge
+  (this closed an Undo-after-re-save hole).
+- **The library copes with malformed imported data.** A JSON backup only validates
+  required fields; a non-string `siteName`, `createdAt`, or `lastReadAt` used to crash the
+  page. Such values are now treated as missing.
 - **`view.js`**: filtering, sorting, summary counts, relative time, and the safe-URL
   check, shared by the popup and the library and unit-tested. The popup's own copies
   moved here; its behavior is unchanged.
@@ -57,7 +71,7 @@ reference.
   anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
   replaces a working link or advances a series, and a new or restored series sent that
   way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
-- Tests: 31 → 84 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, and `restore`).
+- Tests: 31 → 98 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, and cross-context sync).
 
 ### Changed since the removal
 - **NatoManga moved to manganami.com.** natomanga.com now permanently redirects to

@@ -23,8 +23,9 @@ beforeEach(() => {
     storage: {
       local: {
         async get(key) {
-          if (typeof key === "string") return { [key]: data[key] };
-          return { ...data };
+          // Copies, like Chrome: callers never hold references into storage.
+          if (typeof key === "string") return structuredClone({ [key]: data[key] });
+          return structuredClone(data);
         },
         async set(values) {
           Object.assign(data, structuredClone(values));
@@ -849,4 +850,56 @@ test("Remove after a future-stamped Undo still sorts after it", async () => {
   const tomb = data.series[original.id];
   assert.ok(tomb.updatedAt > restored.updatedAt, `${tomb.updatedAt} vs ${restored.updatedAt}`);
   assert.equal(resolveConflict(tomb, restored).deleted, true);
+});
+
+// --- Clock skew: saves never sort before the record they replace ----------
+
+test("a popup save is stamped after a record dated ahead of this device's clock", async () => {
+  data.schemaVersion = 5;
+  const ahead = stored({ chapter: "40", updatedAt: "2099-01-01T00:00:00.000Z" });
+  data.series = { [ahead.id]: structuredClone(ahead) };
+
+  const saved = await upsert(
+    parseChapterUrl("https://www.manganami.com/manga/witch-and-mercenary/chapter-41")
+  );
+  assert.ok(saved.updatedAt > ahead.updatedAt, saved.updatedAt);
+
+  // A first save (nothing to replace) keeps the caller's timestamp.
+  data.series = {};
+  const fresh = parseChapterUrl("https://www.manganami.com/manga/witch-and-mercenary/chapter-1");
+  assert.equal((await upsert(fresh)).updatedAt, fresh.updatedAt);
+});
+
+for (const [resave, expected] of [["10", "40"], ["41", "41"]]) {
+  test(`skewed delete, popup re-save at ${resave}, then Undo: survives the synced tombstone at ${expected}`, async () => {
+    data.schemaVersion = 5;
+    const original = stored({ chapter: "40", updatedAt: "2099-01-01T00:00:00.000Z" });
+    data.series = { [original.id]: structuredClone(original) };
+
+    const previous = await remove(original.id);
+    const cloudTombstone = structuredClone(data.series[original.id]); // what synced
+    await upsert(
+      parseChapterUrl(`https://www.manganami.com/manga/witch-and-mercenary/chapter-${resave}`)
+    );
+    const restored = await restore(original.id, previous);
+
+    assert.equal(restored.chapter, expected);
+    const merged = resolveConflict(restored, cloudTombstone);
+    assert.equal(merged.deleted, false);
+    assert.equal(merged.chapter, expected);
+  });
+}
+
+test("a JSON import drops optional fields that aren't strings instead of storing them", async () => {
+  data.schemaVersion = 5;
+  data.series = {};
+  const crafted = { ...stored(), siteName: { toString: null }, lastReadAt: 5, coverUrl: ["x"], createdAt: {} };
+
+  const result = await importRecords([crafted]);
+  const rec = data.series[crafted.id];
+  assert.equal(result.added, 1);
+  assert.equal(rec.siteName, null);
+  assert.equal(rec.coverUrl, null);
+  assert.equal(typeof (rec.createdAt ?? ""), "string");
+  assert.ok(rec.lastReadAt === null || typeof rec.lastReadAt === "string");
 });

@@ -9,9 +9,18 @@
 // plan's "Why Set current chapter is deferred").
 
 import { migrate, getAll, remove, restore } from "./storage.js";
-import { getSession, getUserEmail } from "./auth.js";
+import { getSession, getUserEmail, SESSION_KEY } from "./auth.js";
 import { syncNow } from "./sync.js";
-import { viewSeries, summarize, sitesIn, safeUrl, relativeTime, isPlan } from "./view.js";
+import {
+  viewSeries,
+  summarize,
+  sitesIn,
+  safeUrl,
+  relativeTime,
+  isPlan,
+  siteLabel,
+  createResultGate,
+} from "./view.js";
 
 const $ = (id) => document.getElementById(id);
 const summaryEl = $("summary");
@@ -25,13 +34,14 @@ const noResultsEl = $("noResults");
 const toastEl = $("toast");
 const toastText = $("toastText");
 const toastAction = $("toastAction");
+const toastDismiss = $("toastDismiss");
 const syncDot = $("syncDot");
 const syncStatus = $("syncStatus");
 const tabs = [...document.querySelectorAll(".tab")];
 const toolbarEl = document.querySelector(".toolbar");
 
 const OVERSCAN = 6;
-const UNDO_MS = 6000;
+const TOAST_MS = 2500; // plain confirmations only; Undo never times out
 
 let allRecords = [];
 let rows = []; // the current filtered + sorted view, which we virtualize
@@ -104,9 +114,25 @@ function renderWindow() {
   const start = Math.max(0, Math.floor(scroller.scrollTop / rowH) - OVERSCAN);
   const end = Math.min(rows.length, start + Math.ceil(viewport / rowH) + OVERSCAN * 2);
 
+  const indexes = new Set();
+  for (let i = start; i < end; i++) indexes.add(i);
+  // The focused row stays rendered even after it scrolls (or is reordered) out
+  // of the window, so focus never silently falls back to the page. Its
+  // neighbours come too, so Tab and Shift+Tab reach the next and previous rows
+  // (the browser then scrolls them into view, which re-renders around them).
+  if (restoreFocus) {
+    const focusedIndex = rows.findIndex((r) => r.id === restoreFocus.id);
+    if (focusedIndex !== -1) {
+      for (const i of [focusedIndex - 1, focusedIndex, focusedIndex + 1]) {
+        if (i >= 0 && i < rows.length) indexes.add(i);
+      }
+    }
+  }
+
+  // DOM order is list order, so keyboard order follows the list.
   const fragment = document.createDocumentFragment();
-  for (let i = start; i < end; i++) {
-    const row = renderRow(rows[i]);
+  for (const i of [...indexes].sort((a, b) => a - b)) {
+    const row = renderRow(rows[i], i);
     row.style.top = i * rowH + "px";
     fragment.appendChild(row);
   }
@@ -115,15 +141,20 @@ function renderWindow() {
   if (restoreFocus) {
     const row = [...sizer.children].find((el) => el.dataset.id === restoreFocus.id);
     const target = row?.querySelector(`[data-action="${restoreFocus.action}"]`);
-    target?.focus({ preventScroll: true });
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+    else searchInput.focus({ preventScroll: true }); // the series left the view
   }
 }
 
-function renderRow(r) {
+function renderRow(r, index) {
   const plan = isPlan(r);
   const row = document.createElement("div");
   row.className = "row";
   row.setAttribute("role", "listitem");
+  // Only a window of rows exists in the DOM; tell assistive tech where this
+  // one sits in the whole filtered list.
+  row.setAttribute("aria-posinset", String(index + 1));
+  row.setAttribute("aria-setsize", String(rows.length));
   row.dataset.id = r.id;
 
   const main = document.createElement("div");
@@ -140,7 +171,7 @@ function renderRow(r) {
   where.className = plan ? "row-plan" : "row-chapter";
   where.textContent = plan ? "Plan to read" : `Chapter ${r.chapter}`;
   const when = relativeTime(r.lastReadAt);
-  sub.append(where, ` · ${r.siteName || r.site}${when ? ` · ${when}` : ""}`);
+  sub.append(where, ` · ${siteLabel(r)}${when ? ` · ${when}` : ""}`);
 
   main.append(title, sub);
 
@@ -227,10 +258,15 @@ function focusRow(id) {
 
 // --- Toast -----------------------------------------------------------------
 
+// Plain confirmations fade after a moment. A toast with an action (Undo) has
+// no deadline at all: it stays until it's used, dismissed (its × or Esc), or
+// replaced by the next one, so nobody runs out of time to reach it.
 let toastTimer;
 function showToast(message, action = null) {
+  clearTimeout(toastTimer);
   toastText.textContent = message;
   toastAction.hidden = !action;
+  toastDismiss.hidden = !action;
   toastAction.onclick = null;
   if (action) {
     toastAction.textContent = action.label;
@@ -238,20 +274,26 @@ function showToast(message, action = null) {
       hideToast();
       action.run();
     };
+  } else {
+    toastTimer = setTimeout(hideToast, TOAST_MS);
   }
   toastEl.hidden = false;
   if (action?.focus) toastAction.focus();
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, action ? UNDO_MS : 2500);
 }
 
 function hideToast() {
+  clearTimeout(toastTimer);
   // Don't strand keyboard focus on a button that's about to disappear.
-  const hadFocus = document.activeElement === toastAction;
+  const hadFocus = toastEl.contains(document.activeElement);
   toastEl.hidden = true;
   toastAction.onclick = null;
   if (hadFocus) searchInput.focus();
 }
+
+toastDismiss.addEventListener("click", hideToast);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !toastEl.hidden && !toastDismiss.hidden) hideToast();
+});
 
 // --- Sync status -------------------------------------------------------------
 
@@ -269,18 +311,58 @@ function setSyncState(state, email = null) {
             : "Synced";
 }
 
+let syncState = "signedout";
+const syncGate = createResultGate(); // only the newest sync result shows
+
+// Only "ok" means our changes reached the cloud. A request made mid-pass waits
+// for the follow-up pass (sync.js), so it gets that pass's real result. When
+// requests overlap, only the newest one reports: every call takes a number
+// before its first await, and every status change (signed out included) goes
+// through the gate, so an older result can never replace a newer one.
 async function runSync(opts = {}) {
-  const session = await getSession();
-  if (!session) {
+  const seq = syncGate.begin();
+  let session = null;
+  let res = null;
+  try {
+    session = await getSession();
+    if (session) {
+      // Interim state, only if nothing newer is in flight or already shown.
+      if ((!opts.throttle || syncState !== "synced") && syncGate.accept(seq)) {
+        setSyncState("syncing");
+      }
+      res = await syncNow(opts);
+    }
+  } finally {
+    syncGate.end(seq);
+  }
+
+  // The account may have changed while the pass ran; report the current one.
+  const now = session ? await getSession() : null;
+  if (!syncGate.accept(seq)) return; // newer work reports (or already did)
+  if (!now) {
+    syncGate.shown(seq);
+    syncState = "signedout";
     setSyncState("signedout");
     return;
   }
-  const email = getUserEmail(session);
-  setSyncState("syncing");
-  const res = await syncNow(opts);
+  // The account changed mid-pass (not the token: that changes on a routine
+  // refresh); the run that change triggered reports.
+  if (now.user?.id !== session.user?.id) return;
+  const email = getUserEmail(now);
+  if (res?.ok) {
+    syncGate.shown(seq);
+    syncState = "synced";
+    setSyncState("synced", email);
+  } else if (res?.error) {
+    syncGate.shown(seq);
+    syncState = "offline";
+    setSyncState("offline");
+  } else if (res?.skipped === "throttled") {
+    // Nothing ran. If an older request is still out, it reports; otherwise
+    // show what we last knew.
+    if (syncGate.idle()) setSyncState(syncState, email);
+  }
   // A pass that pulled changes rewrites storage; the onChanged listener reloads.
-  if (res?.error) setSyncState("offline");
-  else setSyncState("synced", email);
 }
 
 // --- Events ----------------------------------------------------------------
@@ -311,10 +393,20 @@ window.addEventListener("resize", debounce(() => render({ keepScroll: true }), 1
 
 // Stay current: a save from the popup or a sync pass rewrites the library in
 // storage. Reload in place, keeping the scroll position and filters.
+// Signing in or out happens in the popup: follow it here too.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.series) reloadSoon();
+  if (area !== "local") return;
+  if (changes.series) reloadSoon();
+  if (changes[SESSION_KEY]) runSync();
 });
 const reloadSoon = debounce(() => load({ keepScroll: true }), 150);
+
+// This tab can stay open for days. Push pending changes when the connection
+// comes back, and pull what other devices did when you come back to the tab.
+window.addEventListener("online", () => runSync());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") runSync({ throttle: true });
+});
 
 function debounce(fn, ms) {
   let t;

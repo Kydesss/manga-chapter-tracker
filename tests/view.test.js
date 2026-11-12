@@ -12,6 +12,8 @@ import {
   compareChapters,
   isPlan,
   escapeHtml,
+  siteLabel,
+  createResultGate,
 } from "../view.js";
 
 function rec(over = {}) {
@@ -148,4 +150,81 @@ test("compareChapters ranks numbers and refuses to rank labels", () => {
 
 test("escapeHtml escapes markup characters", () => {
   assert.equal(escapeHtml(`<a href="x">'&'</a>`), "&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;");
+});
+
+test("malformed optional fields from a JSON import never break filtering, sorting, or sites", () => {
+  const odd = [
+    rec({ slug: "m1", title: "Mike", siteName: 123, createdAt: 5, lastReadAt: 7 }),
+    rec({ slug: "m2", title: 42, site: "mangaread.org", siteName: { x: 1 }, lastReadAt: "not a date" }),
+    rec({ slug: "m3", title: "November", site: 9 }),
+  ];
+  for (const sort of ["recent", "title", "added"]) {
+    assert.equal(viewSeries(odd, { sort, query: "" }).length, 3, sort);
+  }
+  assert.deepEqual(titles(filterSeries(odd, { query: "mik" })), ["Mike"]);
+  assert.deepEqual(sitesIn(odd), [
+    { id: "mangaread.org", name: "mangaread.org" },
+    { id: "natomanga.com", name: "natomanga.com" },
+  ]);
+  assert.equal(relativeTime(12345), "");
+  // A junk read time sorts like an unknown one: after real ones.
+  const mixed = [rec({ slug: "j", title: "Junk", lastReadAt: "garbage" }), rec({ slug: "r", title: "Real" })];
+  assert.deepEqual(titles(sortSeries(mixed, "recent")), ["Real", "Junk"]);
+});
+
+test("relativeTime never says 0mo or 0y around the month and year boundaries", () => {
+  const now = Date.parse("2026-11-12T12:00:00.000Z");
+  const days = (n) => new Date(now - n * 86_400_000).toISOString();
+  assert.equal(relativeTime(days(34), now), "4w ago");
+  assert.equal(relativeTime(days(35), now), "1mo ago");
+  for (const n of [360, 362, 364]) assert.equal(relativeTime(days(n), now), "12mo ago", String(n));
+  assert.equal(relativeTime(days(365), now), "1y ago");
+});
+
+test("siteLabel shows a string site name, else the site id, never throwing", () => {
+  assert.equal(siteLabel(rec()), "NatoManga");
+  assert.equal(siteLabel(rec({ siteName: { toString: null } })), "natomanga.com");
+  assert.equal(siteLabel(rec({ siteName: 7, site: 9 })), "");
+  assert.equal(siteLabel(null), "");
+});
+
+test("result gate: an older sync result never replaces a newer one, even arriving late", () => {
+  const gate = createResultGate();
+  const remove = gate.begin();
+  const undo = gate.begin();
+
+  // The older pass finishes first, while the newer one is still running.
+  gate.end(remove);
+  assert.equal(gate.accept(remove), false, "newer work still pending");
+
+  // Codex's case: the newer one fails and reports first...
+  gate.end(undo);
+  assert.equal(gate.accept(undo), true);
+  gate.shown(undo);
+  // ...then the older success arrives late (a delayed session read).
+  assert.equal(gate.accept(remove), false, "must not overwrite the newer result");
+  assert.equal(gate.idle(), true);
+});
+
+test("result gate: a lone request reports, and a later one can report after it", () => {
+  const gate = createResultGate();
+  const a = gate.begin();
+  gate.end(a);
+  assert.equal(gate.accept(a), true);
+  gate.shown(a);
+  const b = gate.begin();
+  assert.equal(gate.idle(), false);
+  gate.end(b);
+  assert.equal(gate.accept(b), true);
+});
+
+test("result gate: a sign-out shown by a newer call can't be undone by an older late success", () => {
+  const gate = createResultGate();
+  const olderSync = gate.begin(); // signed in; its final session read is slow
+  gate.end(olderSync);
+  const signOut = gate.begin(); // runs after sign-out: no session, reports at once
+  gate.end(signOut);
+  assert.equal(gate.accept(signOut), true);
+  gate.shown(signOut);
+  assert.equal(gate.accept(olderSync), false, "the stale 'Synced' must not come back");
 });

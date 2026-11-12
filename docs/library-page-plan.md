@@ -31,7 +31,7 @@ second inbox: no badges, no counts that demand attention, nothing that nags.
 
 - **`library.html`**, an extension page opened in a tab. It's also the extension's
   options page (`options_ui`, `open_in_tab`), so right-click > Options lands here.
-- **Opening it:** a **Library** link in the popup footer, via
+- **Opening it:** a **Library** link in the popup header (the footer had no room), via
   `chrome.runtime.openOptionsPage()`, which focuses the tab if it's already open
   instead of opening a second one.
 - **Summary line:** total series, reading, plan to read. Plain numbers, no progress bars
@@ -137,14 +137,27 @@ collapse under the text.
   it replaces had synced. (Found in Codex review.)
 - **`manifest.json`**: `options_ui: { page: "library.html", open_in_tab: true }`. No new
   permissions.
-- **Live updates**: `chrome.storage.onChanged` on the `series` key.
+- **Live updates**: `chrome.storage.onChanged` on the `series` key, and on the session
+  key so signing in or out in the popup shows here. Also syncs when the connection comes
+  back and (throttled) when the tab becomes visible again.
+- **`sync.js`**: the library is a second long-lived context importing the sync engine,
+  so whole sync passes now run under a cross-context Web Lock (`shiori-sync`); without it
+  a stalled upload from one context could overwrite a newer change pushed by the other.
+  A sync requested mid-pass waits for, and reports, the follow-up pass.
+- **Saves are monotonic**: `upsert`, `remove`, and `restore` never stamp a record earlier
+  than the one they replace, so device clock drift can't make a save lose a merge.
 
 ## Tests
 
 - `view.js`: each filter alone and combined, each sort (including series with no read
   time), summary counts ignoring tombstones, relative time, and the safe-URL check.
-- `storage.js`: `restore` brings back a removed series with its chapter, wins over the
-  tombstone in a merge, and does nothing for a series that isn't removed.
+- `storage.js`: `restore` brings back a removed series with its chapter and wins over the
+  tombstone in a merge, including one stamped ahead of this clock. Two modes: with the
+  `previous` record from `remove()`, it merges that into whatever is there now (a
+  rewritten tombstone, or a series already saved again) and keeps the further chapter;
+  without it, it only revives a tombstone and does nothing for a live series.
+- `sync.js`: two engines (the popup's and the library's) with a stalled upload: the newer
+  change still wins in the cloud; a sync requested mid-pass reports the follow-up pass.
 - Manual: open from the popup and from Options (one tab, not two); filters and search;
   Continue/Start/Series open the right pages; Remove then Undo; a save from the popup
   appears in an open library tab; light and dark; keyboard only.

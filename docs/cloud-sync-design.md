@@ -33,7 +33,7 @@ A design blueprint for adding optional accounts and cross-device sync to Manga C
 Cut from v0.2.0 to keep the first sync release focused. None of these block the core feature.
 
 - **Tombstone purge.** At a few thousand records, tombstone growth is negligible. We keep tombstones and add purging later.
-- **Multi-account handling.** v0.2.0 supports one account. Signing into a *different* account than the one whose data is local is treated as a later concern (the safety guard below still prevents silent cross-account merging).
+- **Multi-account handling.** v0.2.0 supports one account. Signing into a *different* account than the one whose data is local is treated as a later concern (the safety guard below was planned but **never shipped**; see Invariant 5).
 - **"Resolved N differences" indicator.** Sync resolves silently in v0.2.0. The conflict-count indicator can be added afterward.
 - **"Set current chapter" override.** The escape hatch for intentionally moving backward (see Conflict resolution) is a later addition.
 
@@ -188,7 +188,7 @@ These rules make local-to-cloud transitions seamless and prevent an empty or sta
 
 **Invariant 4: Safety snapshot before first sync.** Immediately before a user's first-ever cloud sync, the extension writes an automatic local backup (the same JSON the Export feature produces) into `chrome.storage.local`. If anything goes wrong, the pre-sync library is recoverable. Cheap insurance for the highest-risk moment.
 
-**Invariant 5: Account identity is checked.** The id of the signed-in user is recorded. If a different account signs in later, local data from the previous account is not silently merged into the new one (multi-account handling itself is deferred, but this guard ships).
+**Invariant 5: Account identity is checked.** The id of the signed-in user is recorded. If a different account signs in later, local data from the previous account is not silently merged into the new one (multi-account handling itself is deferred). **Correction (2026-11-12):** this guard was never implemented. Sign-out keeps the library and cursor, and nothing checks the owner before syncing, so a second account receives the first account's series. Found in Codex review of PR 6; tracked as "Account isolation" at the top of the roadmap's Sync hardening.
 
 ### Local-to-cloud edge cases
 

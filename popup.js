@@ -8,7 +8,7 @@ import { parsePageUrl } from "./parser.js";
 import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
-import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml } from "./view.js";
+import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml, siteLabel } from "./view.js";
 
 // Elements.
 const saveInfo = document.getElementById("saveInfo");
@@ -268,8 +268,8 @@ function renderItem(r) {
   row.setAttribute(
     "aria-label",
     r.chapter == null
-      ? `${r.title}, plan to read, ${r.siteName}`
-      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`
+      ? `${r.title}, plan to read, ${siteLabel(r)}`
+      : `${r.title}, chapter ${r.chapter}, ${siteLabel(r)}`
   );
 
   const open = () => {
@@ -305,7 +305,7 @@ function renderItem(r) {
   const rest = document.createElement("span");
   rest.className = "item-meta";
   const when = relativeTime(r.lastReadAt); // unknown for plan-to-read records
-  rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
+  rest.textContent = when ? ` · ${siteLabel(r)} · ${when}` : ` · ${siteLabel(r)}`;
   meta.append(chap, rest);
 
   main.append(title, meta);

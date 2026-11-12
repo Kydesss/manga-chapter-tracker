@@ -12,7 +12,7 @@
 // popup and the service worker both write the library; without the lock, one
 // context's write could silently undo the other's.
 
-import { resolveConflict, pickTitle, hasChapter, chapterToNumber } from "./merge.js";
+import { resolveConflict, pickTitle, hasChapter, chapterToNumber, sameSyncContent } from "./merge.js";
 import { upgradeSiteUrl } from "./parser.js";
 
 const KEY = "series"; // { [id]: record }
@@ -213,6 +213,9 @@ export async function upsert(record) {
       status: record.chapter == null ? record.status || "plan" : "reading",
       deleted: false,
       dirty: true,
+      // Never older than the record it replaces (a tombstone or a save stamped
+      // ahead of this device's clock), so the save wins merges on recency.
+      updatedAt: existing ? stampAfter(record.updatedAt, existing.updatedAt) : record.updatedAt,
       createdAt: existing?.createdAt || record.updatedAt,
     };
     await writeMap(map);
@@ -456,6 +459,14 @@ export async function remove(id) {
   });
 }
 
+// `wanted`, unless that would sort at or before `prior`: then just after `prior`.
+function stampAfter(wanted, prior) {
+  const w = Date.parse(wanted);
+  const p = Date.parse(prior);
+  if (Number.isNaN(p) || (!Number.isNaN(w) && w > p)) return wanted;
+  return new Date(p + 1).toISOString();
+}
+
 // A timestamp strictly later than `iso`, and no earlier than now. Device clocks
 // drift, so "now" alone can sort before a tombstone written elsewhere.
 function laterThan(iso) {
@@ -512,17 +523,18 @@ export async function updateMap(transform) {
   });
 }
 
-// Clear the dirty flag on records after a confirmed push. A record that changed
-// again while the push was in flight (a newer updatedAt) stays dirty, so its
-// newer value still gets pushed.
+// Clear the dirty flag on records after a confirmed push, but only where the
+// record still holds exactly what was pushed. Comparing updatedAt alone isn't
+// enough: a JSON import can raise the chapter while keeping the timestamp (the
+// merge keeps the newer of the two), and that change must still be pushed.
 export async function markSynced(pushed) {
   if (!pushed?.length) return;
   return withLibraryLock(async () => {
     const map = await readMap();
-    for (const { id, updatedAt } of pushed) {
-      const current = map[id];
-      if (current && current.updatedAt === updatedAt) {
-        map[id] = { ...current, dirty: false };
+    for (const sent of pushed) {
+      const current = map[sent.id];
+      if (current && sameSyncContent(current, sent)) {
+        map[sent.id] = { ...current, dirty: false };
       }
     }
     await writeMap(map);
@@ -556,6 +568,30 @@ export async function writeSafetySnapshot() {
 }
 
 // --- Import ---------------------------------------------------------------
+
+// Optional fields a backup may carry. The importer only validates required
+// ones, so anything here that isn't a string is dropped rather than stored,
+// where it could break rendering later.
+const OPTIONAL_STRING_FIELDS = [
+  "siteName",
+  "chapterUrl",
+  "createdAt",
+  "updatedAt",
+  "lastReadAt",
+  "coverUrl",
+  "latestChapter",
+  "latestChapterUrl",
+  "latestPublishedAt",
+  "metadataCheckedAt",
+];
+
+function withStringOptionals(rec) {
+  const out = { ...rec };
+  for (const field of OPTIONAL_STRING_FIELDS) {
+    if (out[field] != null && typeof out[field] !== "string") out[field] = null;
+  }
+  return out;
+}
 
 // Merge an array of records into storage (from the Export/Import feature).
 // Conflicts resolve by the same rule as cloud sync (merge.js): the furthest
@@ -603,7 +639,7 @@ export async function importRecords(records) {
 // schema v3/v4 fields the same way the migration fills them, and links on a
 // site's old domain move to its current one (v5).
 function normalizeBackupRecord(raw) {
-  const rec = withUpgradedUrls(raw);
+  const rec = withUpgradedUrls(withStringOptionals(raw));
   const chapter = rec.chapter ?? null;
   return {
     ...SERIES_DEFAULTS,

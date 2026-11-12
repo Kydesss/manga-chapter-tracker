@@ -258,16 +258,25 @@ Done alongside the bundle that first needs them:
 
 ## Sync hardening (ongoing)
 
-Deferred from the v0.2 cloud-sync release (see `docs/cloud-sync-design.md`); none block
-daily use.
+Deferred from the v0.2 cloud-sync release (see `docs/cloud-sync-design.md`), plus gaps
+found in later reviews. The first two are real data problems, found in the Codex review of
+the library page (PR 6); they predate it.
 
+- **Account isolation (do next).** There is no library-owner check today, despite earlier
+  docs claiming v0.2 guards against cross-account merging. Signing out keeps the local
+  library and sync cursor, so signing in as a different Google account pushes the first
+  account's series into the second's cloud (RLS can't stop it: the push is legitimately
+  the second account's). Fix: persist the library's owner, check it before any pull or
+  push, and handle account switching explicitly (scope the cursor and library per account).
+- **Server change order for the sync cursor.** The incremental-pull cursor is built from
+  `updated_at`, which devices set from their own clocks. One record stamped ahead of real
+  time (a device with a fast clock) moves the cursor ahead, and later changes from other
+  devices are skipped until real time catches up. Fix: a server-assigned change column
+  (a sequence or `now()` on write) for the cursor, keeping `updated_at` for conflict
+  resolution. Needs a cloud migration; do it with the ones below.
 - Tombstone purge (hard-delete old soft-deletes).
-- **Monotonic timestamps on saves.** Remove and Undo stamp `updatedAt` strictly later than
-  the record they replace, but a popup save (`upsert`) still uses the device's clock. If a
-  record arrived stamped ahead of this device's clock (clock drift), a save can sort
-  before it and lose a merge on recency-based fields (deletion, title). Progress is safe
-  either way (furthest chapter wins). Found in Codex review of the library page.
-- Full multi-account handling (v0.2 only guards against cross-account merging).
+- Full multi-account handling (switching between accounts on one device; see account
+  isolation above).
 - "Resolved N differences" indicator after a conflict.
 - "Set current chapter" override to intentionally move to an earlier chapter. The v0.3.3
   "Go to chapter X" button is the read-only half of this; deliberately moving the saved
@@ -295,9 +304,8 @@ daily use.
 ## Polish backlog (small, pick up anytime)
 
 - Keyboard shortcut to save the current chapter.
-- Filter/sort by site in the library.
 - Parser robustness for URL variants (query strings, `#anchors`, `/chapter-100/2`, `vol-2-chapter-5`).
-- Delete undo.
+- Undo for the popup's Remove (the library page has it; `restore()` makes it a small change).
 - Chapter labels that can't be ranked numerically ("Extra", "Omake"), which reach storage
   through import or another client. v0.3.3 stops the save area claiming a direction for
   them, but the furthest-chapter merge rule still can't order them either: needs a real
