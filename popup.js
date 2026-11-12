@@ -8,6 +8,7 @@ import { parsePageUrl } from "./parser.js";
 import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
 import { getSession, getUserEmail, signOut } from "./auth.js";
 import { syncNow } from "./sync.js";
+import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml, siteLabel } from "./view.js";
 
 // Elements.
 const saveInfo = document.getElementById("saveInfo");
@@ -27,6 +28,14 @@ const importFile = document.getElementById("importFile");
 const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
 const syncDot = document.getElementById("syncDot");
+const libraryBtn = document.getElementById("libraryBtn");
+
+// The full library is the extension's options page: openOptionsPage focuses
+// the tab if it's already open instead of opening a second one.
+libraryBtn.addEventListener("click", async () => {
+  await chrome.runtime.openOptionsPage();
+  window.close();
+});
 
 const ROW_H = 56; // must match --row-h in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
@@ -43,28 +52,8 @@ async function getActiveTab() {
   return tab;
 }
 
-// Compare two chapter labels ("83.2", "246") numerically. Returns -1/0/1, or
-// NaN when the labels aren't numerically comparable (possible for records that
-// arrived through JSON import or another device, never from our own parser).
-function compareChapters(a, b) {
-  const na = parseFloat(a);
-  const nb = parseFloat(b);
-  if (Number.isNaN(na) || Number.isNaN(nb)) return a === b ? 0 : NaN;
-  return Math.sign(na - nb);
-}
-
-// A stored chapterUrl is untrusted: it can come from a hand-edited JSON import
-// or another device, and older records may not have one at all. Only ever hand
-// an http(s) URL to the tabs API.
-function safeUrl(raw) {
-  if (typeof raw !== "string") return null;
-  try {
-    const u = new URL(raw);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.href : null;
-  } catch {
-    return null;
-  }
-}
+// compareChapters, safeUrl, relativeTime, and escapeHtml live in view.js,
+// shared with the library page.
 
 // The secondary "go to your saved chapter" action. Hidden unless this tab is a
 // different chapter of a series we already track.
@@ -226,23 +215,8 @@ async function load() {
 }
 
 function computeView() {
-  const query = searchInput.value.trim().toLowerCase();
-  filtered = query
-    ? allRecords.filter((r) => r.title.toLowerCase().includes(query))
-    : allRecords.slice();
-
-  if (sortSelect.value === "title") {
-    filtered.sort((a, b) => a.title.localeCompare(b.title));
-  } else {
-    // Recently read first. Series with no known read time (plan to read, or
-    // imported without one) follow alphabetically, instead of an import's
-    // timestamp pushing them all to the top.
-    filtered.sort(
-      (a, b) =>
-        (b.lastReadAt || "").localeCompare(a.lastReadAt || "") ||
-        a.title.localeCompare(b.title)
-    );
-  }
+  // Search + sort (recently read first, unread series alphabetically after).
+  filtered = viewSeries(allRecords, { query: searchInput.value, sort: sortSelect.value });
 
   // Header count + empty/no-results messaging.
   countEl.textContent = allRecords.length ? `${allRecords.length} series` : "";
@@ -294,8 +268,8 @@ function renderItem(r) {
   row.setAttribute(
     "aria-label",
     r.chapter == null
-      ? `${r.title}, plan to read, ${r.siteName}`
-      : `${r.title}, chapter ${r.chapter}, ${r.siteName}`
+      ? `${r.title}, plan to read, ${siteLabel(r)}`
+      : `${r.title}, chapter ${r.chapter}, ${siteLabel(r)}`
   );
 
   const open = () => {
@@ -331,7 +305,7 @@ function renderItem(r) {
   const rest = document.createElement("span");
   rest.className = "item-meta";
   const when = relativeTime(r.lastReadAt); // unknown for plan-to-read records
-  rest.textContent = when ? ` · ${r.siteName} · ${when}` : ` · ${r.siteName}`;
+  rest.textContent = when ? ` · ${siteLabel(r)} · ${when}` : ` · ${siteLabel(r)}`;
   meta.append(chap, rest);
 
   main.append(title, meta);
@@ -401,42 +375,12 @@ function showToast(msg) {
   toastTimer = setTimeout(() => (toastEl.hidden = true), 2000);
 }
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[c]));
-}
-
 function debounce(fn, ms) {
   let t;
   return (...args) => {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   };
-}
-
-// Compact relative time for the "last read" line, e.g. "just now", "3d ago".
-function relativeTime(iso) {
-  if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d ago`;
-  const w = Math.floor(d / 7);
-  if (w < 5) return `${w}w ago`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
-  return `${Math.floor(d / 365)}y ago`;
 }
 
 // --- Auth + sync status ---------------------------------------------------

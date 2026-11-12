@@ -27,10 +27,22 @@ const PUSH_BATCH = 500;
 const PULL_PAGE = 1000;
 const THROTTLE_MS = 30000;
 
-// Concurrency control: one pass at a time; coalesce a request that arrives mid-pass.
-let running = false;
-let runAgain = false;
+// Concurrency control. The popup and the library page each import this module,
+// so each has its own copy of this state. Within one context, requests that
+// arrive mid-pass coalesce into a single follow-up pass. Across contexts, a
+// Web Lock (shared by every page of the extension) runs whole passes one at a
+// time; otherwise a stalled push from one context could land after another
+// context had already pushed a newer change, overwriting it in the cloud.
+// The storage lock (storage.js) stays separate, so saves never wait on the network.
+const SYNC_LOCK = "shiori-sync";
+let inFlight = null; // this context's running pass
+let trailing = null; // the follow-up pass queued behind it
 let lastRunAt = 0;
+
+function withSyncLock(fn) {
+  const locks = globalThis.navigator?.locks;
+  return locks?.request ? locks.request(SYNC_LOCK, () => fn()) : fn();
+}
 
 const SITE_NAME = Object.fromEntries(SITES.map((s) => [s.id, s.name]));
 
@@ -145,8 +157,9 @@ async function push(records, userId) {
 // --- The pass -------------------------------------------------------------
 
 // Trigger a sync. Returns a small status object. Safe to call often; it
-// no-ops when signed out, throttles the popup-open trigger, and coalesces
-// overlapping calls behind a single in-flight pass.
+// no-ops when signed out and throttles the popup-open trigger. A call that
+// arrives while a pass is running waits for one follow-up pass and gets that
+// pass's result, so a caller only hears "ok" once its change was pushed.
 export async function syncNow({ throttle = false } = {}) {
   const session = await getSession();
   if (!session) return { skipped: "signed-out" };
@@ -154,13 +167,30 @@ export async function syncNow({ throttle = false } = {}) {
   if (throttle && Date.now() - lastRunAt < THROTTLE_MS) {
     return { skipped: "throttled" };
   }
-  if (running) {
-    runAgain = true;
-    return { skipped: "in-progress" };
+  if (inFlight) {
+    trailing ??= inFlight.then(() => {
+      trailing = null;
+      return runPass();
+    });
+    return trailing;
   }
+  return runPass();
+}
 
-  running = true;
+function runPass() {
   lastRunAt = Date.now();
+  const pass = withSyncLock(passOnce).finally(() => {
+    if (inFlight === pass) inFlight = null;
+  });
+  inFlight = pass;
+  return pass;
+}
+
+// One pull -> merge -> push pass, run under the cross-context sync lock.
+async function passOnce() {
+  // Re-read the session: it may have changed while this pass waited its turn.
+  const session = await getSession();
+  if (!session) return { skipped: "signed-out" };
   try {
     await migrate();
     const userId = session.user.id;
@@ -188,7 +218,11 @@ export async function syncNow({ throttle = false } = {}) {
     // Records edited while the push was in flight stay dirty for the next pass.
     await markSynced(pushRecords);
 
-    // 4. Advance the cursor using server timestamps (avoids clock-skew gaps).
+    // 4. Advance the cursor. Known gap: these updated_at values are client edit
+    //    times (pushed by devices), not a server change order, so a record
+    //    stamped ahead of real time can hide later changes from incremental
+    //    pulls. Fixing it needs a server-assigned change column; see the
+    //    roadmap's Sync hardening.
     const newCursor = maxTimestamp([
       cursor,
       ...rows.map((r) => r.updated_at),
@@ -205,13 +239,6 @@ export async function syncNow({ throttle = false } = {}) {
   } catch (err) {
     // Leave dirty flags and cursor untouched so the next pass retries cleanly.
     return { ok: false, error: err?.message || String(err) };
-  } finally {
-    running = false;
-    if (runAgain) {
-      runAgain = false;
-      // Run once more for the request that arrived mid-pass.
-      syncNow();
-    }
   }
 }
 

@@ -30,14 +30,17 @@ grows into a small cross-platform service.
 
 - **Shipped:** local-first MVP (v0.1.x), cloud accounts + cross-device sync (v0.2.x,
   validated cross-device), and the Shiori brand + design system (v0.3.x).
-- **On the `autoscraper` branch (targeting v0.4.0):** the `plan`/`reading` status,
+- **On `master`, unreleased (targeting v0.4.0):** the `plan`/`reading` status,
   **Plan to read from a series page**, a shared forward-only bulk write (`bulkUpsert`),
-  storage schema v3/v4, and storage/sync fixes. The NatoManga bookmark scraper built
-  there (with covers, `+N` badges, and **Refresh updates**) was removed before release.
-  See [Site bookmark import](#paused-site-bookmark-import).
-- **Next:** Bundle A (the full-page library and browser-bookmark import). Site bookmark
-  import is paused with no site planned; the MangaRead importer was dropped.
-- **Supported sites:** mangaread.org and natomanga.com for saving chapters.
+  storage schema v3-v5 (v5 moved NatoManga links to manganami.com), and storage/sync
+  fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
+  updates**) was removed before release. See
+  [Site bookmark import](#paused-site-bookmark-import).
+- **In progress:** Bundle A, part 1: the full-page library, on `feature/library-page`.
+  Design: [library-page-plan.md](./docs/library-page-plan.md). Then Settings and
+  browser-bookmark import. Site bookmark import is paused with no site planned.
+- **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
+  chapters and series.
 - **Surfaces:** Chrome extension.
 
 ## How this roadmap is organized
@@ -129,9 +132,13 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   as the popup, no new backend. Two areas: a rich **Library** (summary stats, status
   filter tabs, sort, large cards, management actions) and **Settings** (connected sites,
   reminders, notifications, account/sync, data import/export). Design target: the Figma
-  Make reference. Opened via `chrome.tabs.create({ url: chrome.runtime.getURL("library.html") })`.
-  Needs a counterpart to the popup's reversible-action pattern: the app is where a series
-  sitting at the wrong chapter is most likely to be noticed.
+  Make reference. *Part 1 (the Library) is in progress; see
+  [library-page-plan.md](./docs/library-page-plan.md).* It's also the options page,
+  opened with `chrome.runtime.openOptionsPage()`. Needs a counterpart to the popup's
+  reversible-action pattern: the app is where a series sitting at the wrong chapter is
+  most likely to be noticed. v1 has the read-only half (Continue / Start); moving a
+  position backward waits on `progressResetAt` (Sync hardening), because sync would
+  undo it today.
 - **Series bookmarks / statuses.** One record per series gains a `status`
   (`plan` | `reading` | later `completed`/`dropped`). Save a series page as "plan to
   read"; saving a chapter flips it to "reading." Needs series-page detection in the
@@ -251,16 +258,37 @@ Done alongside the bundle that first needs them:
 
 ## Sync hardening (ongoing)
 
-Deferred from the v0.2 cloud-sync release (see `docs/cloud-sync-design.md`); none block
-daily use.
+Deferred from the v0.2 cloud-sync release (see `docs/cloud-sync-design.md`), plus gaps
+found in later reviews. The first two are real data problems, found in the Codex review of
+the library page (PR 6); they predate it.
 
+- **Account isolation (do next).** There is no library-owner check today, despite earlier
+  docs claiming v0.2 guards against cross-account merging. Signing out keeps the local
+  library and sync cursor, so signing in as a different Google account pushes the first
+  account's series into the second's cloud (RLS can't stop it: the push is legitimately
+  the second account's). Fix: persist the library's owner, check it before any pull or
+  push, and handle account switching explicitly (scope the cursor and library per account).
+- **Server change order for the sync cursor.** The incremental-pull cursor is built from
+  `updated_at`, which devices set from their own clocks. One record stamped ahead of real
+  time (a device with a fast clock) moves the cursor ahead, and later changes from other
+  devices are skipped until real time catches up. Fix: a server-assigned change column
+  (a sequence or `now()` on write) for the cursor, keeping `updated_at` for conflict
+  resolution. Needs a cloud migration; do it with the ones below.
 - Tombstone purge (hard-delete old soft-deletes).
-- Full multi-account handling (v0.2 only guards against cross-account merging).
+- Full multi-account handling (switching between accounts on one device; see account
+  isolation above).
 - "Resolved N differences" indicator after a conflict.
 - "Set current chapter" override to intentionally move to an earlier chapter. The v0.3.3
   "Go to chapter X" button is the read-only half of this; deliberately moving the saved
   position backward still means overwriting it from the chapter page. Site import raises
   the stakes: an import that misreads a page can only be undone this way.
+- **One synced reset marker: `progressResetAt`.** Proposed while planning the library
+  page. Sync's furthest-chapter rule means a deliberate backward move (Set current
+  chapter, or saving an earlier chapter from the popup while signed in) is undone by the
+  next sync pass today. A synced `progressResetAt`, set by a delete or by Set current
+  chapter, would let the merge ignore progress from before the reset. It solves this and
+  the deletion boundary below with one cloud column; see
+  [library-page-plan.md](./docs/library-page-plan.md).
 - **A deletion boundary that syncs.** Since v0.4, a save that resurrects a deleted series
   restarts it, so the tombstone's old chapter doesn't win. But a device that never saw the
   deletion still holds the old chapter, and merging it with the restart revives that
@@ -276,9 +304,8 @@ daily use.
 ## Polish backlog (small, pick up anytime)
 
 - Keyboard shortcut to save the current chapter.
-- Filter/sort by site in the library.
 - Parser robustness for URL variants (query strings, `#anchors`, `/chapter-100/2`, `vol-2-chapter-5`).
-- Delete undo.
+- Undo for the popup's Remove (the library page has it; `restore()` makes it a small change).
 - Chapter labels that can't be ranked numerically ("Extra", "Omake"), which reach storage
   through import or another client. v0.3.3 stops the save area claiming a direction for
   them, but the furthest-chapter merge rule still can't order them either: needs a real

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shiori · Library</title>
+    <link rel="icon" href="icons/icon32.png" />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="library.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="masthead">
+        <div class="brand">
+          <img src="icons/logo.svg" width="28" height="28" alt="" aria-hidden="true" />
+          <h1>Shiori <span class="brand-sub">Library</span></h1>
+        </div>
+        <div class="sync" title="Sign in and out from the toolbar popup">
+          <span id="syncDot" class="sync-dot is-signedout" aria-hidden="true"></span>
+          <span id="syncStatus" aria-live="polite">Not signed in</span>
+        </div>
+      </header>
+
+      <p id="summary" class="summary" aria-live="polite"></p>
+
+      <!-- Filters. Status buttons act as a single-choice group (aria-pressed). -->
+      <div class="toolbar">
+        <div class="status-tabs" role="group" aria-label="Filter by status">
+          <button type="button" class="tab" data-status="all" aria-pressed="true">All</button>
+          <button type="button" class="tab" data-status="reading" aria-pressed="false">Reading</button>
+          <button type="button" class="tab" data-status="plan" aria-pressed="false">Plan to read</button>
+        </div>
+        <div class="toolbar-controls">
+          <label for="site" class="visually-hidden">Filter by site</label>
+          <select id="site">
+            <option value="all">All sites</option>
+          </select>
+          <label for="search" class="visually-hidden">Search series</label>
+          <input id="search" type="search" placeholder="Search series..." autocomplete="off" />
+          <label for="sort" class="visually-hidden">Sort series</label>
+          <select id="sort">
+            <option value="recent">Recently read</option>
+            <option value="title">Title (A-Z)</option>
+            <option value="added">Recently added</option>
+          </select>
+        </div>
+      </div>
+
+      <main class="content">
+        <!-- Virtualized list: only rows in view are rendered into #sizer. -->
+        <div id="scroller" class="scroller" role="list" aria-label="Your series">
+          <div id="sizer" class="sizer"></div>
+        </div>
+        <div id="empty" class="empty-state" hidden>
+          <img src="icons/logo.svg" width="48" height="48" alt="" aria-hidden="true" />
+          <p class="empty-title">Nothing saved yet</p>
+          <p class="empty-text">
+            Open a chapter on MangaRead or NatoManga and save it from the Shiori toolbar
+            button, or save a series page as Plan to read.
+          </p>
+        </div>
+        <p id="noResults" class="empty" hidden>No series match these filters.</p>
+      </main>
+    </div>
+
+    <!-- Confirmation messages, with an optional action (Undo). -->
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+      <span id="toastText"></span>
+      <button id="toastAction" type="button" class="toast-action" hidden></button>
+      <button id="toastDismiss" type="button" class="toast-dismiss" aria-label="Dismiss" title="Dismiss (Esc)" hidden>×</button>
+    </div>
+
+    <script type="module" src="library.js"></script>
+  </body>
+</html>
