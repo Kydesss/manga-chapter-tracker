@@ -5,10 +5,10 @@
 // JSON export/import for backup. Loaded as an ES module.
 
 import { parsePageUrl } from "./parser.js";
-import { migrate, getAll, getOne, upsert, remove, importRecords } from "./storage.js";
-import { getSession, getUserEmail, signOut } from "./auth.js";
-import { syncNow } from "./sync.js";
-import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml, siteLabel } from "./view.js";
+import { migrate, getAll, getLibrary, getOne, upsert, remove, importRecords, OWNER_KEY } from "./storage.js";
+import { getSession, getUserEmail, signOut, SESSION_KEY } from "./auth.js";
+import { syncNow, resolveAccount } from "./sync.js";
+import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml, siteLabel, createResultGate } from "./view.js";
 
 // Elements.
 const saveInfo = document.getElementById("saveInfo");
@@ -29,6 +29,11 @@ const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
 const syncDot = document.getElementById("syncDot");
 const libraryBtn = document.getElementById("libraryBtn");
+const accountPrompt = document.getElementById("accountPrompt");
+const accountPromptTitle = document.getElementById("accountPromptTitle");
+const accountPromptText = document.getElementById("accountPromptText");
+const keepSeparateBtn = document.getElementById("keepSeparateBtn");
+const mergeBtn = document.getElementById("mergeBtn");
 
 // The full library is the extension's options page: openOptionsPage focuses
 // the tab if it's already open instead of opening a second one.
@@ -43,6 +48,7 @@ const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 let pending = null; // parsed record for the current tab, or null
 let pendingTabId = null; // the tab `pending` came from, so we can navigate it
 let allRecords = []; // every saved series (source of truth in memory)
+let libraryEpoch; // which library allRecords came from (storage.js getLibrary)
 let filtered = []; // current search/sort view, the array we virtualize
 
 // --- Active tab + already-saved awareness ---------------------------------
@@ -210,7 +216,7 @@ goSavedBtn.addEventListener("click", async () => {
 async function load() {
   // Migrations must also run for local-only users; sync may never be invoked.
   await migrate();
-  allRecords = await getAll();
+  ({ records: allRecords, epoch: libraryEpoch } = await getLibrary());
   computeView();
 }
 
@@ -315,10 +321,15 @@ function renderItem(r) {
   del.textContent = "×"; // multiplication sign as a tidy close glyph
   del.setAttribute("aria-label", `Remove ${r.title} from library`);
   del.title = "Remove from library";
+  const epoch = libraryEpoch; // the library this row was drawn from
   del.addEventListener("click", async (e) => {
     e.stopPropagation();
-    await remove(r.id);
+    const removed = await remove(r.id, { epoch });
     await load();
+    if (removed === false) {
+      showToast("The library changed; nothing was removed");
+      return;
+    }
     showToast(`Removed ${r.title}`);
     runSync(); // push the tombstone so the deletion propagates
   });
@@ -388,13 +399,17 @@ function debounce(fn, ms) {
 let currentEmail = null;
 
 // Drive the footer status: a coloured dot plus a short label.
-// state: "signedout" | "syncing" | "synced" | "offline"
+// state: "signedout" | "syncing" | "synced" | "offline" | "paused"
 function setSyncState(state) {
   syncDot.className = "sync-dot is-" + state;
-  const dotTitle = { signedout: "Signed out", syncing: "Syncing", synced: "Synced", offline: "Offline" };
+  const dotTitle = { signedout: "Signed out", syncing: "Syncing", synced: "Synced", offline: "Offline", paused: "Paused" };
   syncDot.title = dotTitle[state] || "";
+  // A pass starting doesn't settle anything; keep the prompt up until one does.
+  if (state !== "paused" && state !== "syncing") accountPrompt.hidden = true;
   if (state === "signedout") {
     authStatus.textContent = "Sign in to sync";
+  } else if (state === "paused") {
+    authStatus.textContent = "Sync paused";
   } else if (state === "syncing") {
     authStatus.textContent = "Syncing...";
   } else if (state === "offline") {
@@ -418,16 +433,20 @@ async function refreshAuthUI() {
   }
 }
 
+async function doSignOut() {
+  await signOut();
+  currentEmail = null;
+  authBtn.textContent = "Sign in";
+  setSyncState("signedout");
+  showToast("Signed out");
+}
+
 authBtn.addEventListener("click", async () => {
   authBtn.disabled = true;
   try {
     const session = await getSession();
     if (session) {
-      await signOut();
-      currentEmail = null;
-      authBtn.textContent = "Sign in";
-      setSyncState("signedout");
-      showToast("Signed out");
+      await doSignOut();
     } else {
       // Run sign-in in the service worker so it survives the popup closing
       // (launchWebAuthFlow takes focus and Chrome closes the popup otherwise).
@@ -446,26 +465,130 @@ authBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Account mismatch ------------------------------------------------------
+// The signed-in account isn't the one this library syncs with. Sync stays
+// paused (sync.js pushes nothing) until the user picks one of these.
+
+let asked = null; // { userId, epoch }: what the prompt is asking about
+
+function showAccountPrompt({ owner, user, epoch }) {
+  asked = { userId: user?.id, epoch };
+  const me = user?.email || "this account";
+  accountPromptTitle.replaceChildren();
+  accountPromptText.replaceChildren();
+  const strong = (text) => {
+    const el = document.createElement("strong");
+    el.textContent = text;
+    return el;
+  };
+  if (owner?.id) {
+    const them = owner.email || "another account";
+    accountPromptTitle.textContent = `This library is ${them}'s`;
+    accountPromptText.append(
+      "You're signed in as ", strong(me), ", so syncing is paused. ",
+      strong("Keep separate"), " saves this library for ", them, " and loads yours. ",
+      strong("Merge"), " adds these series to your account."
+    );
+    keepSeparateBtn.hidden = false;
+    mergeBtn.className = "save-btn secondary";
+  } else {
+    accountPromptTitle.textContent = "Whose library is this?";
+    accountPromptText.append(
+      "It synced before this update, and Shiori can't tell which account it was. ",
+      "Syncing is paused. ", strong("Merge"), " adds these series to ", me,
+      "; if they aren't yours, sign out below."
+    );
+    keepSeparateBtn.hidden = true; // it would never come back
+    mergeBtn.className = "save-btn";
+  }
+  accountPrompt.hidden = false;
+}
+
+async function chooseAccount(choice) {
+  for (const b of [keepSeparateBtn, mergeBtn]) b.disabled = true;
+  try {
+    const result = await resolveAccount(choice, asked || {});
+    if (result.stale) {
+      // The account or library changed while this waited: ask again about what's there now.
+      showToast("The account changed; check again");
+      await load();
+      await runSync();
+      return;
+    }
+    accountPrompt.hidden = true;
+    showToast(choice === "separate" ? "Switched libraries" : "Merging into this account");
+    await load(); // the library may have just been swapped
+    await refreshSaveArea();
+    await runSync();
+  } catch (err) {
+    showToast("Couldn't switch: " + (err?.message || "failed"));
+  } finally {
+    for (const b of [keepSeparateBtn, mergeBtn]) b.disabled = false;
+  }
+}
+
+keepSeparateBtn.addEventListener("click", () => chooseAccount("separate"));
+mergeBtn.addEventListener("click", () => chooseAccount("merge"));
+
+const syncGate = createResultGate(); // only the newest sync result shows
+
 // Run a sync pass (when signed in), reflect pulled changes, and update status.
+// When runs overlap, only the newest reports, and only for the account still
+// signed in: an older pass finishing late can't replace "Sync paused" with
+// "Synced" (the same rule as the library page).
 async function runSync(opts = {}) {
-  const session = await getSession();
-  if (!session) {
+  const seq = syncGate.begin();
+  let session = null;
+  let res = null;
+  try {
+    session = await getSession();
+    if (session) {
+      if (syncGate.accept(seq)) setSyncState("syncing");
+      res = await syncNow(opts);
+    }
+  } finally {
+    syncGate.end(seq);
+  }
+  const now = await getSession();
+  // Checked after the last await, so nothing newer can start before we report.
+  if (!syncGate.accept(seq)) return; // newer work reports (or already did)
+  if (!now) {
+    syncGate.shown(seq);
     setSyncState("signedout");
     return;
   }
-  setSyncState("syncing");
-  const res = await syncNow(opts);
-  if (res?.ok || res?.skipped) {
+  // The account changed mid-pass: the run that change triggered reports.
+  if (now.user?.id !== session?.user?.id || res?.skipped === "account-changed") return;
+  syncGate.shown(seq);
+  if (res?.skipped === "account-mismatch") {
+    showAccountPrompt(res);
+    setSyncState("paused");
+  } else if (res?.ok || res?.skipped) {
+    // Status first, with no await since the gate check: a newer run (say, one
+    // that finds the account changed and pauses) can then only come after it.
+    setSyncState("synced");
     if (res?.ok) {
       await load();
       await refreshSaveArea();
     }
-    setSyncState("synced");
   } else if (res?.error) {
     setSyncState("offline");
     showToast("Sync error: " + res.error);
   }
 }
+
+// The account can change while this popup is open (signing in or choosing an
+// account from another window). Follow it, so the status never says "Synced"
+// for a library whose sync is paused.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes[SESSION_KEY] || changes[OWNER_KEY]) followAccountChange();
+});
+const followAccountChange = debounce(async () => {
+  await refreshAuthUI();
+  await load();
+  runSync();
+}, 150);
 
 // Re-filter as the user types (debounced) or changes the sort.
 searchInput.addEventListener("input", debounce(computeView, 150));

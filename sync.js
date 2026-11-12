@@ -8,7 +8,7 @@
 // overwrite a further chapter that another device wrote.
 
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
-import { getSession, refreshSession } from "./auth.js";
+import { getSession, getUserEmail, refreshSession } from "./auth.js";
 import { SITES, upgradeSiteUrl } from "./parser.js";
 import { mergeRemoteIntoLocal } from "./merge.js";
 import {
@@ -20,6 +20,10 @@ import {
   setCursor,
   hasSyncedBefore,
   writeSafetySnapshot,
+  ownerStatus,
+  ensureOwner,
+  switchLibrary,
+  adoptLibrary,
 } from "./storage.js";
 
 const REST = `${SUPABASE_URL}/rest/v1/series`;
@@ -100,9 +104,19 @@ function isCloudCompatible(rec) {
 
 // --- Authenticated fetch (refreshes the token once on 401) ----------------
 
-async function authedFetch(url, opts = {}, allowRetry = true) {
+// Thrown when the signed-in account changes while a pass runs. The pass stops
+// before it can merge one account's cloud into the other's library or push.
+class AccountChanged extends Error {}
+
+function userOf(session) {
+  return { id: session.user.id, email: getUserEmail(session) };
+}
+
+// Every request in a pass is pinned to the account the pass started with.
+async function authedFetch(url, opts, userId, allowRetry = true) {
   const session = await getSession();
-  if (!session) throw new Error("Not signed in.");
+  if (!session) throw new AccountChanged("Signed out during sync.");
+  if (session.user?.id !== userId) throw new AccountChanged("Account changed during sync.");
   const res = await fetch(url, {
     ...opts,
     headers: {
@@ -113,20 +127,20 @@ async function authedFetch(url, opts = {}, allowRetry = true) {
   });
   if (res.status === 401 && allowRetry) {
     const refreshed = await refreshSession();
-    if (refreshed) return authedFetch(url, opts, false);
+    if (refreshed) return authedFetch(url, opts, userId, false);
   }
   return res;
 }
 
 // --- Pull / Push ----------------------------------------------------------
 
-async function pull(cursor) {
+async function pull(cursor, userId) {
   const rows = [];
   let offset = 0;
   for (;;) {
     let url = `${REST}?select=*&order=updated_at.asc&limit=${PULL_PAGE}&offset=${offset}`;
     if (cursor) url += `&updated_at=gt.${encodeURIComponent(cursor)}`;
-    const res = await authedFetch(url, { method: "GET" });
+    const res = await authedFetch(url, { method: "GET" }, userId);
     if (!res.ok) throw new Error(`Pull failed (${res.status}): ${await res.text()}`);
     const page = await res.json();
     rows.push(...page);
@@ -147,7 +161,7 @@ async function push(records, userId) {
         Prefer: "resolution=merge-duplicates,return=minimal",
       },
       body: JSON.stringify(batch),
-    });
+    }, userId);
     if (!res.ok) throw new Error(`Push failed (${res.status}): ${await res.text()}`);
     for (const row of batch) ids.push(row.id);
   }
@@ -160,9 +174,19 @@ async function push(records, userId) {
 // no-ops when signed out and throttles the popup-open trigger. A call that
 // arrives while a pass is running waits for one follow-up pass and gets that
 // pass's result, so a caller only hears "ok" once its change was pushed.
+// A library that belongs to another account is never synced: the result is
+// { skipped: "account-mismatch", owner, user } until resolveAccount() runs.
 export async function syncNow({ throttle = false } = {}) {
   const session = await getSession();
   if (!session) return { skipped: "signed-out" };
+
+  // Checked before the throttle, so a paused library always reads as paused.
+  await migrate();
+  const user = userOf(session);
+  const access = await ownerStatus(user);
+  if (access.status === "mismatch") {
+    return { skipped: "account-mismatch", owner: access.owner, user, epoch: access.epoch };
+  }
 
   if (throttle && Date.now() - lastRunAt < THROTTLE_MS) {
     return { skipped: "throttled" };
@@ -193,13 +217,19 @@ async function passOnce() {
   if (!session) return { skipped: "signed-out" };
   try {
     await migrate();
-    const userId = session.user.id;
+    const user = userOf(session);
+    const userId = user.id;
+    // Before anything touches the cloud: is this library this account's?
+    const access = await ensureOwner(user);
+    if (!access.ok) {
+      return { skipped: "account-mismatch", owner: access.owner, user, epoch: access.epoch };
+    }
     const firstTime = !(await hasSyncedBefore());
     if (firstTime) await writeSafetySnapshot();
 
     // 1. PULL remote changes since our cursor.
     const cursor = await getCursor();
-    const rows = await pull(cursor);
+    const rows = await pull(cursor, userId);
     const remoteRecords = rows.map(fromRow);
 
     // 2. MERGE into local (never deletes on absence; sets dirty where we differ).
@@ -237,9 +267,42 @@ async function passOnce() {
       total: all.filter((r) => !r.deleted).length,
     };
   } catch (err) {
+    // The pass that the account change triggers reports instead.
+    if (err instanceof AccountChanged) return { skipped: "account-changed" };
     // Leave dirty flags and cursor untouched so the next pass retries cleanly.
     return { ok: false, error: err?.message || String(err) };
   }
+}
+
+// The user's answer to an account mismatch, run between passes (under the sync
+// lock):
+//   "separate" - set this library aside for its account and load this one's.
+//   "merge"    - add this library to this account (its next sync merges both).
+// `asked` is what the prompt showed: { userId, epoch } from the mismatch
+// result. If the signed-in account or the library changed while the choice
+// waited for the lock, nothing happens and the result says { stale: true }, so
+// the user is asked again about what's actually there. Then call syncNow(). A
+// no-op if the mismatch was already resolved elsewhere.
+export async function resolveAccount(choice, asked = {}) {
+  if (choice !== "separate" && choice !== "merge") {
+    throw new Error(`Unknown choice: ${choice}`);
+  }
+  return withSyncLock(async () => {
+    const session = await getSession();
+    if (!session) throw new Error("Not signed in.");
+    await migrate();
+    const user = userOf(session);
+    if (asked.userId !== undefined && asked.userId !== user.id) return { resolved: false, stale: true };
+    const access = await ownerStatus(user);
+    if (access.status !== "mismatch") return { resolved: false };
+    if (asked.epoch !== undefined && asked.epoch !== access.epoch) return { resolved: false, stale: true };
+    const result =
+      choice === "separate"
+        ? await switchLibrary(user, { epoch: asked.epoch })
+        : await adoptLibrary(user, { epoch: asked.epoch });
+    if (result.stale) return { resolved: false, stale: true };
+    return { resolved: true };
+  });
 }
 
 function maxTimestamp(values) {

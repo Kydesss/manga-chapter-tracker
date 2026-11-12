@@ -33,7 +33,7 @@ A design blueprint for adding optional accounts and cross-device sync to Manga C
 Cut from v0.2.0 to keep the first sync release focused. None of these block the core feature.
 
 - **Tombstone purge.** At a few thousand records, tombstone growth is negligible. We keep tombstones and add purging later.
-- **Multi-account handling.** v0.2.0 supports one account. Signing into a *different* account than the one whose data is local is treated as a later concern (the safety guard below was planned but **never shipped**; see Invariant 5).
+- **Multi-account handling.** v0.2.0 supports one account. Signing into a *different* account than the one whose data is local is treated as a later concern. The safety guard (Invariant 5) was planned for v0.2.0 but only shipped later, in the account isolation fix.
 - **"Resolved N differences" indicator.** Sync resolves silently in v0.2.0. The conflict-count indicator can be added afterward.
 - **"Set current chapter" override.** The escape hatch for intentionally moving backward (see Conflict resolution) is a later addition.
 
@@ -188,7 +188,14 @@ These rules make local-to-cloud transitions seamless and prevent an empty or sta
 
 **Invariant 4: Safety snapshot before first sync.** Immediately before a user's first-ever cloud sync, the extension writes an automatic local backup (the same JSON the Export feature produces) into `chrome.storage.local`. If anything goes wrong, the pre-sync library is recoverable. Cheap insurance for the highest-risk moment.
 
-**Invariant 5: Account identity is checked.** The id of the signed-in user is recorded. If a different account signs in later, local data from the previous account is not silently merged into the new one (multi-account handling itself is deferred). **Correction (2026-11-12):** this guard was never implemented. Sign-out keeps the library and cursor, and nothing checks the owner before syncing, so a second account receives the first account's series. Found in Codex review of PR 6; tracked as "Account isolation" at the top of the roadmap's Sync hardening.
+**Invariant 5: Account identity is checked.** The library records its owner (`libraryOwner`: the account id and email it syncs with). If a different account signs in later, local data from the previous account is never silently merged into the new one. (Planned for v0.2.0 but not built then: until the account isolation fix, a second account received the first account's series. Found in Codex review of PR 6.)
+
+- **Before any pull or push**, a pass compares the owner with the signed-in account. An unowned library that has never synced is claimed by the first account (the first-sign-in merge, Invariant 2). A library with no visible series is set aside without asking.
+- **Any other mismatch pauses sync** and the popup asks. **Keep separate** parks the library (series and cursor) under its owner in `parkedLibraries` and loads the signed-in account's parked library, or an empty one that the next sync fills from its cloud. The parked library comes back when its account signs in again. **Merge** adds the library to the signed-in account: tombstones are dropped (merging adds what you're reading; it doesn't replay the other account's removals) and the cursor resets, so the next pass is a first sync for that account. Or the user signs out.
+- **Every request in a pass is pinned to the account it started with**, so signing out and in as someone else mid-pass stops it before it merges or pushes anything.
+- **Upgrades** (storage schema v6): a library that synced before owners were recorded is owned by the account signed in at upgrade, or is "unknown" if signed out. An unknown owner can be merged but not kept separate, since no sign-in would ever bring it back.
+- Ownership changes run under the sync lock, between passes, and each is a single storage write, so an interruption can't lose a library or pair it with another account's cursor. Merge also folds in the signed-in account's own parked library.
+- **Nothing acts on a library that has been switched out.** A `libraryEpoch` changes on every switch and merge. The prompt's choice carries the account and epoch it asked about and is refused if either changed while it waited; rows remember the epoch they were drawn from, so Remove (and Undo) from a screen that predates a switch does nothing.
 
 ### Local-to-cloud edge cases
 
@@ -200,7 +207,7 @@ These rules make local-to-cloud transitions seamless and prevent an empty or sta
 | Sync fails partway (network drops) | Pushed-but-unconfirmed records stay `dirty`; cursor not advanced; retried with backoff | Invariant 3 |
 | User deletes a series on device A | Tombstone syncs; device B hides it on next pull | Deletion is explicit, not inferred from absence |
 | User signs out | Local library stays as-is, usable offline; sync just stops | Local is always the UI's source of truth |
-| User signs into a *different* account | Previous account's local data is not merged into the new account | Invariant 5 |
+| User signs into a *different* account | Sync pauses; the user keeps the libraries separate (parked per account) or merges on purpose | Invariant 5 |
 | Cloud returns a stale/partial response | Only returned rows are upserted; missing rows left alone | Invariant 1 |
 | Two sync passes triggered at once | Second coalesces behind the first via the sync lock | No overlapping passes, no double push |
 

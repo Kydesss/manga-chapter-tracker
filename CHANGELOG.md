@@ -73,6 +73,22 @@ reference.
   way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
 - Tests: 31 → 98 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, and cross-context sync).
 
+### Fixed since the removal
+- **Account isolation.** Signing out and back in as a different Google account no longer
+  uploads the first account's library to the second. The library now records the account
+  it syncs with, and every sync pass checks it before pulling or pushing. A different
+  account with series in the library pauses sync, and the popup asks: **Keep separate**
+  sets the library aside for its account (it returns when that account signs in again)
+  and loads yours; **Merge** adds the series to your account on purpose. An empty library
+  switches without asking, and a library that never synced still merges on first
+  sign-in. A pass also stops if the account changes partway through. Storage schema v6
+  records the owner of an existing library: the account signed in at upgrade, or
+  "unknown" if signed out, which asks on the next sign-in. Switching and merging are
+  single storage writes, and a choice, a Remove, or an Undo made on a screen that
+  predates a switch is refused rather than applied to the wrong library. The design doc
+  had claimed this guard since v0.2; it was never built. Reviewed with Codex over four
+  passes.
+
 ### Changed since the removal
 - **NatoManga moved to manganami.com.** natomanga.com now permanently redirects to
   `www.manganami.com` with the same paths, so saved NatoManga links went through a

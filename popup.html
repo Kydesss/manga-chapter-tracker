@@ -25,6 +25,17 @@
       </div>
     </section>
 
+    <!-- Shown only when the signed-in account isn't this library's. Sync is
+         paused until the user chooses; nothing is pushed in the meantime. -->
+    <section id="accountPrompt" class="account-prompt" aria-labelledby="accountPromptTitle" hidden>
+      <h2 id="accountPromptTitle" class="account-prompt-title"></h2>
+      <p id="accountPromptText" class="account-prompt-text"></p>
+      <div class="save-actions">
+        <button id="keepSeparateBtn" class="save-btn" type="button">Keep separate</button>
+        <button id="mergeBtn" class="save-btn secondary" type="button">Merge into this account</button>
+      </div>
+    </section>
+
     <!-- Controls for the library. -->
     <div class="controls">
       <label for="search" class="visually-hidden">Search series</label>
