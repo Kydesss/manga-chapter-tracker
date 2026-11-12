@@ -448,16 +448,20 @@ test("bulk import adds new series and never moves an existing one back", async (
     { timestamp: T }
   );
 
-  assert.deepEqual(result, {
+  const { items, ...counts } = result;
+  assert.deepEqual(counts, {
     added: 1,
     advanced: 0,
     enriched: 1,
     unchanged: 0,
     removed: 0,
+    beforeReset: 0,
+    olderBookmark: 0,
     skipped: 0,
     processed: 2,
     total: 2,
   });
+  assert.equal(items.length, 2);
   assert.equal(data.series.a.chapter, "20");
   assert.equal(data.series.a.chapterUrl, existing.chapterUrl);
   assert.equal(data.series.a.title, "A (Official Title)");

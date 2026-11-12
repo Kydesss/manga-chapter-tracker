@@ -42,9 +42,18 @@ body {
 
 .masthead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-7);
+  gap: var(--space-2) var(--space-7);
+}
+
+.masthead-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-6);
 }
 
 .brand {
@@ -371,6 +380,123 @@ select {
 .empty-title {
   margin: 0;
   font-weight: 600;
+}
+
+.empty-import {
+  margin-top: var(--space-6);
+}
+
+/* --- Bookmark import preview ------------------------------------------------ */
+
+.import-dialog {
+  width: min(560px, calc(100% - 32px));
+  max-height: min(80vh, 640px);
+  padding: 0;
+  border: 1px solid var(--surface-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-2);
+}
+
+.import-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.import-dialog::backdrop {
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.import-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-height: 0;
+  padding: var(--space-8);
+}
+
+.import-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+.import-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.import-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.import-group {
+  border: 1px solid var(--surface-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+
+.import-group > summary {
+  cursor: pointer;
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.import-group-note {
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.import-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.import-group li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--surface-2);
+}
+
+.import-group li:first-child {
+  border-top: none;
+}
+
+.import-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-item-detail {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  filter: none;
 }
 
 .empty-text {

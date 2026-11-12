@@ -20,6 +20,27 @@ fixes, and the JSON import fixes. The importer's design and pre-merge review sta
 reference.
 
 ### Added since the removal
+- **Import browser bookmarks** (Bundle A; see
+  [docs/bookmark-import-plan.md](./docs/bookmark-import-plan.md)). **Import bookmarks**
+  in the library page's header (and in its empty state) asks for Chrome's `bookmarks`
+  permission, which is optional: requested on click, so existing installs see no new
+  warning. Bookmarks on chapter pages become reading progress, and series pages become
+  Plan to read. A preview groups what would happen (moves forward, new, skipped
+  because you removed it or moved it back since, already up to date) before anything
+  is written; Import writes it in one step and syncs. Each chapter keeps the
+  bookmark's own date (the later of added and last opened) as its read and set time,
+  so the library sorts sensibly and resets are respected: an old bookmark can't undo a
+  deliberate move back. A bookmark older than the chapter you saved doesn't replace it
+  either, and duplicates are checked against these rules before the furthest is picked.
+  An import planned against a library that switched accounts while the preview was open
+  is refused, one import runs at a time, and importing twice changes nothing.
+- **A series brought back after a removal keeps its chapter only if that chapter is
+  from after the removal** (merge rule). Otherwise it comes back as Plan to read, so an
+  old bookmark imported after a removal this device hadn't seen can't revive the old
+  chapter.
+- **`bulkUpsert` respects resets** and takes a source's own chapter times. It's split
+  into a pure `planBulkUpsert` (also behind the read-only `previewBulkUpsert`) and the
+  locked write, and reports a per-series outcome.
 - **Full-page library** (`library.html`, Bundle A part 1). Opened from a **Library** link
   in the popup header, and it's also the extension's options page. Status tabs (All /
   Reading / Plan to read), a site filter (shown when the library spans more than one
@@ -102,7 +123,7 @@ reference.
   - **Older installs stop pushing** once the migration runs: rows must carry
     `client_schema`, which older builds don't send. Their changes wait locally until
     they update.
-- Tests: 31 → 157 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, cross-context sync, account isolation, and cloud schema v2 against a fake of the migrated table).
+- Tests: 31 → 177 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, `restore`, cross-context sync, account isolation, and cloud schema v2 against a fake of the migrated table).
 
 ### Fixed since the removal
 - **Cloud timestamps no longer look changed on every pull.** Postgres returns

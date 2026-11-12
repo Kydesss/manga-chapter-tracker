@@ -387,111 +387,224 @@ export async function upsert(record, { resetProgress = false } = {}) {
 //     be advanced past, and sync can't push a chapter without its link.
 //   - Duplicates within one import collapse to the furthest chapter.
 //   - A series the user removed stays removed unless `restoreDeleted` is set.
+//   - Resets are respected: a chapter only advances a series if it was set at
+//     or after the series' progressResetAt (a deliberate move back, or a
+//     removal and restart), and no earlier than the chapter already saved.
+//     Its set time is the record's own progressAt when the source reports one
+//     (a bookmark's date), else the time this write stamps.
 //   - Unknown (null) metadata never erases what we already know, and an
 //     import isn't a read: lastReadAt is only set when the source reports it.
 //   - Metadata-only changes (covers, latest chapters) stay local: they don't
 //     bump updatedAt or queue a sync, because the cloud doesn't store them.
-export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted = false } = {}) {
+//
+// `epoch` (from getLibrary or previewBulkUpsert): the library the caller
+// planned against. If a switch or merge has replaced it since, nothing is
+// written and the result is { stale: true }.
+export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted = false, epoch } = {}) {
   if (!Array.isArray(records)) {
     throw new Error("Bulk import data must be an array of series records.");
   }
 
   return withLibraryLock(async () => {
-    const map = await readMap();
-    const deduped = new Map();
-    let skipped = 0;
-
-    for (const raw of records) {
-      if (!isImportableRecord(raw)) {
-        skipped++;
-        continue;
-      }
-      // Timestamps in one format, and unreadable ones dropped (Codex review,
-      // round 8), as for migrations and backups.
-      const record = withUsableChapter(withValidTimestamps(withNormalTimestamps(withUpgradedUrls(raw))));
-      const previous = deduped.get(record.id);
-      deduped.set(record.id, previous ? preferFurtherRecord(previous, record) : record);
-    }
-
-    let added = 0;
-    let advanced = 0;
-    let enriched = 0;
-    let unchanged = 0;
-    let removed = 0;
-
-    for (const incoming of deduped.values()) {
-      const existing = map[incoming.id];
-      if (existing?.deleted && !restoreDeleted) {
-        removed++;
-        continue;
-      }
-      if (!existing || existing.deleted) {
-        map[incoming.id] = normalizeImportedRecord(incoming, timestamp, existing);
-        added++;
-        continue;
-      }
-
-      const shouldAdvance =
-        chapterToNumber(incoming.chapter) !== null &&
-        (!hasChapter(existing.chapter) ||
-          compareChapterProgress(incoming.chapter, existing.chapter) > 0);
-
-      const merged = {
-        ...SERIES_DEFAULTS,
-        ...existing,
-        siteName: incoming.siteName || existing.siteName,
-        title: pickTitle(incoming, existing),
-        seriesUrl: incoming.seriesUrl || existing.seriesUrl,
-        ...keepKnownMetadata(incoming, existing),
-        deleted: false,
-      };
-
-      if (shouldAdvance) {
-        merged.status = "reading";
-        merged.chapter = incoming.chapter;
-        merged.chapterUrl = incoming.chapterUrl ?? null;
-        // Sources rarely say when a chapter was read. Keep the last known read
-        // time instead of stamping the import time, which would make every
-        // imported series look freshly read.
-        if (incoming.lastReadAt) merged.lastReadAt = incoming.lastReadAt;
-      }
-
-      if (sameImportContent(existing, merged)) {
-        unchanged++;
-        continue;
-      }
-
-      const syncRelevantChange = !sameImportSyncContent(existing, merged);
-      // Stamped after the record it replaces, which is never before its reset
-      // marker, so an advance always counts in merges.
-      merged.updatedAt = syncRelevantChange ? stampAfter(timestamp, existing.updatedAt) : existing.updatedAt;
-      if (shouldAdvance) merged.progressAt = merged.updatedAt;
-      merged.dirty = syncRelevantChange ? true : existing.dirty === true;
-      map[incoming.id] = merged;
-      if (shouldAdvance) advanced++;
-      else enriched++;
-    }
-
-    await writeMap(map);
-    return {
-      added,
-      advanced,
-      enriched,
-      unchanged,
-      removed,
-      skipped,
-      processed: deduped.size,
-      total: Object.values(map).filter((r) => !r.deleted).length,
-    };
+    if (epoch !== undefined && epoch !== (await readEpoch())) return { stale: true };
+    const plan = planBulkUpsert(await readMap(), records, { timestamp, restoreDeleted });
+    await writeMap(plan.next);
+    const { next, ...result } = plan;
+    return result;
   });
+}
+
+// What bulkUpsert would do to the library right now, without writing: the
+// same plan, plus the epoch to hand back to bulkUpsert.
+export async function previewBulkUpsert(records, { timestamp = nowISO(), restoreDeleted = false } = {}) {
+  if (!Array.isArray(records)) {
+    throw new Error("Bulk import data must be an array of series records.");
+  }
+  const r = await chrome.storage.local.get([KEY, EPOCH_KEY]);
+  const { next, ...plan } = planBulkUpsert(r[KEY] || {}, records, { timestamp, restoreDeleted });
+  return { ...plan, epoch: r[EPOCH_KEY] || "initial" };
+}
+
+// The pure core of bulkUpsert: the next library map (a copy) and what happens
+// to each series. `items` holds one entry per series after duplicates
+// collapse: { id, title, siteName, outcome, chapter, from }, where outcome is
+// one of "added-reading", "added-plan", "advanced", "unchanged", "enriched",
+// "removed", "before-reset", or "older-bookmark". `chapter` is the imported
+// chapter (for a skip, the furthest one that couldn't be applied); `from` is
+// the library's chapter before.
+export function planBulkUpsert(map, records, { timestamp = nowISO(), restoreDeleted = false } = {}) {
+  const next = { ...map };
+  const groups = new Map(); // id -> every usable record for that series
+  let skipped = 0;
+
+  for (const raw of records) {
+    if (!isImportableRecord(raw)) {
+      skipped++;
+      continue;
+    }
+    // Timestamps in one format, and unreadable ones dropped (Codex review,
+    // round 8), as for migrations and backups.
+    const record = withUsableChapter(withValidTimestamps(withNormalTimestamps(withUpgradedUrls(raw))));
+    const list = groups.get(record.id);
+    if (list) list.push(record);
+    else groups.set(record.id, [record]);
+  }
+
+  const counts = { added: 0, advanced: 0, enriched: 0, unchanged: 0, removed: 0, beforeReset: 0, olderBookmark: 0 };
+  const items = [];
+
+  for (const [id, candidates] of groups) {
+    const existing = next[id];
+    const live = existing && !existing.deleted ? existing : null;
+    // When a candidate's chapter counts as set: the source's own time, else
+    // the time this write will stamp (after the record it replaces).
+    const setTime = (rec) =>
+      sourceProgressTime(rec, timestamp) || (existing ? stampAfter(timestamp, existing.updatedAt) : timestamp);
+    // Why a candidate's chapter can't be applied, or null if it can:
+    //   "before-reset": set before the series' reset (merge.js rule 5).
+    //   "older-bookmark": set before the chapter already saved here. Taking it
+    //     would replace newer progress with older evidence, which can lose to
+    //     a reset this device hasn't pulled yet, taking the newer progress
+    //     with it (Codex review).
+    const blocked = (rec) => {
+      if (!existing || !hasChapter(rec.chapter)) return null;
+      const at = setTime(rec);
+      if (existing.progressResetAt && at < existing.progressResetAt) return "before-reset";
+      if (live && hasChapter(live.chapter) && live.progressAt && at < live.progressAt) return "older-bookmark";
+      return null;
+    };
+    // Duplicates collapse only after each one is checked against the series,
+    // so a usable bookmark isn't lost behind a further one that isn't. Ties
+    // go to the one set more recently, whatever the order they arrived in.
+    const chapters = candidates.filter((c) => hasChapter(c.chapter));
+    const best = (list) =>
+      list.reduce((a, b) => {
+        if (!a) return b;
+        const c = compareChapterProgress(b.chapter, a.chapter);
+        if (c !== 0) return c > 0 ? b : a;
+        return setTime(b) > setTime(a) ? b : a;
+      }, null);
+    const pick = best(chapters.filter((c) => !blocked(c)));
+    const furthest = best(chapters);
+    // Title and metadata from every duplicate; the chapter (and its times)
+    // only from the pick.
+    const base = candidates.reduce((a, b) => preferFurtherRecord(a, b));
+    const incoming = {
+      ...base,
+      chapter: pick?.chapter ?? null,
+      chapterUrl: pick?.chapterUrl ?? null,
+      lastReadAt: pick?.lastReadAt ?? null,
+      progressAt: pick?.progressAt ?? null,
+    };
+    const setAt = sourceProgressTime(incoming, timestamp);
+    const item = {
+      id,
+      title: pickTitle(live || incoming, incoming) || id,
+      siteName: incoming.siteName || existing?.siteName || incoming.site,
+      chapter: pick?.chapter ?? furthest?.chapter ?? null,
+      from: live && hasChapter(live.chapter) ? live.chapter : null,
+    };
+
+    if (existing?.deleted && !restoreDeleted) {
+      counts.removed++;
+      items.push({ ...item, outcome: "removed" });
+      continue;
+    }
+    if (!live) {
+      const added = normalizeImportedRecord(incoming, timestamp, existing, setAt);
+      next[id] = added;
+      counts.added++;
+      items.push({ ...item, chapter: added.chapter, outcome: hasChapter(added.chapter) ? "added-reading" : "added-plan" });
+      continue;
+    }
+
+    const isFurther = (rec) =>
+      !!rec && (!hasChapter(live.chapter) || compareChapterProgress(rec.chapter, live.chapter) > 0);
+    const shouldAdvance = isFurther(pick);
+    // A further chapter that couldn't be applied: say why, rather than
+    // calling the series up to date.
+    const skipReason = !shouldAdvance && isFurther(furthest) ? blocked(furthest) : null;
+
+    const merged = {
+      ...SERIES_DEFAULTS,
+      ...live,
+      siteName: incoming.siteName || live.siteName,
+      title: pickTitle(incoming, live),
+      seriesUrl: incoming.seriesUrl || live.seriesUrl,
+      ...keepKnownMetadata(incoming, live),
+      deleted: false,
+    };
+
+    if (shouldAdvance) {
+      merged.status = "reading";
+      merged.chapter = incoming.chapter;
+      merged.chapterUrl = incoming.chapterUrl ?? null;
+      // Sources rarely say when a chapter was read. Keep the last known read
+      // time instead of stamping the import time, which would make every
+      // imported series look freshly read.
+      if (incoming.lastReadAt) merged.lastReadAt = incoming.lastReadAt;
+    }
+
+    const quietOutcome = skipReason || null;
+    if (sameImportContent(live, merged)) {
+      bump(counts, quietOutcome || "unchanged");
+      items.push({ ...item, chapter: quietOutcome ? furthest.chapter : item.chapter, outcome: quietOutcome || "unchanged" });
+      continue;
+    }
+
+    const syncRelevantChange = !sameImportSyncContent(live, merged);
+    merged.updatedAt = syncRelevantChange ? stampAfter(timestamp, live.updatedAt) : live.updatedAt;
+    // When the chapter was set: the source's time if it reported one (already
+    // checked against the reset and the saved chapter above), else this write.
+    if (shouldAdvance) merged.progressAt = setAt || merged.updatedAt;
+    merged.dirty = syncRelevantChange ? true : live.dirty === true;
+    next[id] = merged;
+    const outcome = shouldAdvance ? "advanced" : quietOutcome || "enriched";
+    bump(counts, outcome);
+    items.push({ ...item, chapter: quietOutcome ? furthest.chapter : item.chapter, outcome });
+  }
+
+  return {
+    next,
+    ...counts,
+    skipped,
+    processed: groups.size,
+    total: Object.values(next).filter((r) => !r.deleted).length,
+    items,
+  };
+}
+
+const OUTCOME_COUNTS = {
+  advanced: "advanced",
+  enriched: "enriched",
+  unchanged: "unchanged",
+  "before-reset": "beforeReset",
+  "older-bookmark": "olderBookmark",
+};
+
+function bump(counts, outcome) {
+  counts[OUTCOME_COUNTS[outcome]]++;
+}
+
+// When an imported chapter was set, as the source reports it (a bookmark's
+// date): a valid time no later than the import itself, or null if unknown.
+function sourceProgressTime(record, timestamp) {
+  if (!hasChapter(record.chapter) || typeof record.progressAt !== "string") return null;
+  const t = Date.parse(record.progressAt);
+  if (Number.isNaN(t)) return null;
+  const limit = Date.parse(timestamp);
+  return new Date(Number.isNaN(limit) ? t : Math.min(t, limit)).toISOString();
 }
 
 // `existing`: a removed series being restored (restoreDeleted), if any. Its
 // reset marker is kept, so a device that missed the removal can't bring the
 // old chapter back. An import never sets a marker of its own.
-function normalizeImportedRecord(record, timestamp, existing) {
-  const chapter = hasChapter(record.chapter) ? record.chapter : null;
+function normalizeImportedRecord(record, timestamp, existing, setAt = null) {
   const updatedAt = existing ? stampAfter(timestamp, existing.updatedAt) : timestamp;
+  const progressAt = setAt || updatedAt;
+  // Restoring a removed series: a chapter from before its reset doesn't count.
+  const beforeReset = !!existing?.progressResetAt && progressAt < existing.progressResetAt;
+  const chapter = hasChapter(record.chapter) && !beforeReset ? record.chapter : null;
   return {
     ...SERIES_DEFAULTS,
     ...record,
@@ -500,7 +613,7 @@ function normalizeImportedRecord(record, timestamp, existing) {
     chapterUrl: chapter == null ? null : record.chapterUrl ?? null,
     // Unknown unless the source reported it: an import is not a read.
     lastReadAt: chapter == null ? null : record.lastReadAt ?? null,
-    progressAt: chapter == null ? null : updatedAt,
+    progressAt: chapter == null ? null : progressAt,
     progressResetAt: existing?.progressResetAt ?? null,
     createdAt: existing?.createdAt || record.createdAt || timestamp,
     updatedAt,
