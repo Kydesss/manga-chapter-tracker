@@ -61,6 +61,10 @@ The popup saves chapters itself, because saving is manual and only happens while
 
 `popup.js` wires it together. On open it runs the schema migration, then reads the active tab and runs its URL through the parser. It either enables the Save button (showing the detected series and chapter) or explains that this isn't a supported chapter page. When the tab is a different chapter of a series you already track, it also offers a secondary "Go to chapter X" that returns you to your saved position without saving. For a series marked Plan to read, the button becomes "Start reading". On a series page instead of a chapter, it offers "Plan to read", or, for a series you're already reading, your saved chapter and the "Go to chapter X" jump. It renders the library (virtualized, so thousands of rows stay fast), filters as you type, sorts by recent or title, opens a series on click, removes one on the delete button, shows relative last-read times, and — when signed in — kicks off a sync pass and reflects its status.
 
+`library.html` / `library.css` / `library.js` is the full-page library, opened from the popup header's **Library** link (it's also the extension's options page). It shows the same library with status tabs (All / Reading / Plan to read), a site filter, search, and three sorts, plus a summary line. Each row has **Continue** (or **Start** for a plan), which jumps to your saved place without changing it, **Series**, and **Remove** with **Undo**. It re-renders when storage changes, so a save from the popup shows up in an open tab. Design notes: [docs/library-page-plan.md](./docs/library-page-plan.md).
+
+`view.js` holds the pure view logic the popup and the library share: filtering, sorting, summary counts, relative times, and the safe-URL check.
+
 ## How the pieces talk
 
 ```

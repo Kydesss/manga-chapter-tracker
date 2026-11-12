@@ -440,14 +440,64 @@ function sameImportSyncContent(a, b) {
 }
 
 // Soft delete: tombstone the record so the deletion can sync. The UI filters
-// tombstones out, so this looks like a normal removal.
+// tombstones out, so this looks like a normal removal. Returns the series as it
+// was just before (read under the same lock), so an Undo can bring back exactly
+// that; null if there was nothing to remove.
 export async function remove(id) {
   return withLibraryLock(async () => {
     const map = await readMap();
     const existing = map[id];
-    if (!existing) return;
-    map[id] = { ...existing, deleted: true, dirty: true, updatedAt: nowISO() };
+    if (!existing) return null;
+    // Strictly later than the record it replaces: an Undo can stamp ahead of
+    // this device's clock, and a remove that sorted before it would lose.
+    map[id] = { ...existing, deleted: true, dirty: true, updatedAt: laterThan(existing.updatedAt) };
     await writeMap(map);
+    return existing;
+  });
+}
+
+// A timestamp strictly later than `iso`, and no earlier than now. Device clocks
+// drift, so "now" alone can sort before a tombstone written elsewhere.
+function laterThan(iso) {
+  const now = Date.now();
+  const t = Date.parse(iso);
+  return new Date(Number.isNaN(t) ? now : Math.max(now, t + 1)).toISOString();
+}
+
+// Undo a remove. `previous` is what remove() returned: the series as it was.
+// The record may have changed since: a sync can rewrite the tombstone (a stale
+// device's deletion carries its own older chapter), or a save can bring the
+// series back at another chapter. Either way the restore merges `previous`
+// with what's there now, as two live records: the furthest chapter wins, so
+// Undo never leaves it lower than when it was removed. The result is stamped
+// strictly newer than the current record, so it wins wherever that synced, and
+// under the merge rule a resurrecting save restarts from itself.
+// Returns the series as it now stands, or null when there's nothing to restore
+// (no record, or a live one and no `previous` to merge).
+export async function restore(id, previous = null) {
+  return withLibraryLock(async () => {
+    const map = await readMap();
+    const current = map[id];
+    if (!current) return null;
+    const usable = previous?.id === id ? previous : null;
+    if (!current.deleted && !usable) return null;
+
+    const updatedAt = laterThan(current.updatedAt);
+    const merged = resolveConflict(
+      { ...(usable || current), deleted: false, updatedAt },
+      { ...current, deleted: false }
+    );
+    // Already live and already at least as far along: nothing to change.
+    if (
+      !current.deleted &&
+      merged.chapter === current.chapter &&
+      merged.chapterUrl === current.chapterUrl
+    ) {
+      return current;
+    }
+    map[id] = { ...SERIES_DEFAULTS, ...current, ...merged, deleted: false, dirty: true, updatedAt };
+    await writeMap(map);
+    return map[id];
   });
 }
 

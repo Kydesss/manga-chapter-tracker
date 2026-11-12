@@ -20,6 +20,24 @@ fixes, and the JSON import fixes. The importer's design and pre-merge review sta
 reference.
 
 ### Added since the removal
+- **Full-page library** (`library.html`, Bundle A part 1). Opened from a **Library** link
+  in the popup header, and it's also the extension's options page. Status tabs (All /
+  Reading / Plan to read), a site filter (shown when the library spans more than one
+  site), search, and sorts (Recently read, Title, Recently added), plus a summary line.
+  Each row has **Continue** (or **Start** for a plan), a read-only jump to your saved
+  place; **Series**; and **Remove** with **Undo**. The page updates live when the library
+  changes, keeps keyboard focus as the virtualized list scrolls, and works in light and
+  dark and down to phone width. No new permissions. Design and the reasoning for
+  deferring "Set current chapter": `docs/library-page-plan.md`.
+- **Undo for Remove** in storage: `remove(id)` now returns the series as it was, and
+  `restore(id, previous)` brings it back. If a sync rewrote the tombstone or a save brought
+  the series back in the meantime, restore merges the two and keeps the further chapter,
+  so Undo never leaves a series lower than when it was removed. Removes and restores are
+  stamped strictly later than the record they replace, so device clock drift can't make
+  them lose a merge. (The popup's Remove doesn't offer Undo yet.)
+- **`view.js`**: filtering, sorting, summary counts, relative time, and the safe-URL
+  check, shared by the popup and the library and unit-tested. The popup's own copies
+  moved here; its behavior is unchanged.
 - **Plan to read from a series page.** Open a series' main page on MangaRead or
   NatoManga (`/manga/{slug}`) and the save area offers **Plan to read**. The series
   joins the library with no chapter, and the first chapter you save from it flips it to
@@ -39,7 +57,7 @@ reference.
   anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
   replaces a working link or advances a series, and a new or restored series sent that
   way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
-- Tests: 31 → 62 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, and the manganami.com move).
+- Tests: 31 → 84 (series parsing, the plan-save guard, `bulkUpsert`, resurrection, the manganami.com move, the library view logic, and `restore`).
 
 ### Changed since the removal
 - **NatoManga moved to manganami.com.** natomanga.com now permanently redirects to

@@ -38,6 +38,25 @@ h1 {
   font-size: var(--text-xs);
 }
 
+.header-right {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+/* The way into the full library: an accent link, so it's findable without
+   competing with the Save button. */
+.link-btn.header-link {
+  color: var(--text);
+  font-weight: 600;
+  padding: 2px 6px;
+}
+
+.link-btn.header-link:hover {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
 .save-area {
   background: var(--surface);
   border-radius: var(--radius);
@@ -351,6 +370,7 @@ h1 {
   cursor: pointer;
   padding: 4px 6px;
   border-radius: var(--radius-xs);
+  white-space: nowrap;
 }
 
 .link-btn:hover {

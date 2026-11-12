@@ -81,7 +81,9 @@ merge logic.
   gitignored; don't commit it.
 - `background.js` - service worker; runs the sign-in flow so it survives the popup
   closing.
-- `popup.html` / `popup.css` / `popup.js` - the UI.
+- `popup.html` / `popup.css` / `popup.js` - the toolbar popup: save and resume.
+- `library.html` / `library.css` / `library.js` - the full-page library (also the options page).
+- `view.js` - pure filtering, sorting, and display helpers shared by both (unit-tested).
 - `tests/` - Node unit tests.
 - `docs/` - design docs (`cloud-sync-design.md`, the bookmark import plans, including the
   removed NatoManga importer's) and the `process-log.md` decision journal.

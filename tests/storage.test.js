@@ -7,10 +7,13 @@ import {
   importRecords,
   markSynced,
   migrate,
+  remove,
+  restore,
   updateMap,
   upsert,
 } from "../storage.js";
 import { parseChapterUrl, parseSeriesUrl } from "../parser.js";
+import { resolveConflict } from "../merge.js";
 
 let data;
 
@@ -692,4 +695,158 @@ test("bulk import reports unchanged and invalid records, and rejects non-arrays"
   assert.equal(result.skipped, 2);
   assert.deepEqual(data.series[existing.id], existing);
   await assert.rejects(bulkUpsert("nope"), /must be an array/);
+});
+
+// --- restore: Undo for Remove ------------------------------------------------
+
+test("restore brings a removed series back with its chapter, newer than the tombstone", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40", dirty: false });
+  data.series = { [original.id]: structuredClone(original) };
+
+  await remove(original.id);
+  const tombstone = structuredClone(data.series[original.id]);
+  assert.equal(tombstone.deleted, true);
+
+  const restored = await restore(original.id);
+
+  assert.equal(restored.deleted, false);
+  assert.equal(restored.chapter, "40");
+  assert.equal(restored.chapterUrl, original.chapterUrl);
+  assert.equal(restored.dirty, true);
+  assert.ok(restored.updatedAt >= tombstone.updatedAt);
+  assert.equal((await getAll()).length, 1);
+
+  // Wherever the tombstone synced, the restore wins and keeps the chapter.
+  const older = { ...tombstone, updatedAt: "2026-01-01T00:00:00.000Z" };
+  const merged = resolveConflict(restored, older);
+  assert.equal(merged.deleted, false);
+  assert.equal(merged.chapter, "40");
+});
+
+test("restore keeps a Plan-to-read series as Plan to read", async () => {
+  data.schemaVersion = 5;
+  const plan = stored({ chapter: null, chapterUrl: null, status: "plan", lastReadAt: null });
+  data.series = { [plan.id]: structuredClone(plan) };
+
+  await remove(plan.id);
+  const restored = await restore(plan.id);
+
+  assert.equal(restored.deleted, false);
+  assert.equal(restored.chapter, null);
+  assert.equal(restored.status, "plan");
+});
+
+test("restore does nothing for a series that isn't removed, or doesn't exist", async () => {
+  data.schemaVersion = 5;
+  const live = stored({ dirty: false });
+  data.series = { [live.id]: structuredClone(live) };
+
+  assert.equal(await restore(live.id), null);
+  assert.deepEqual(data.series[live.id], live);
+  assert.equal(await restore("nope"), null);
+});
+
+test("remove returns the series as it was, for Undo", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+
+  const previous = await remove(original.id);
+  assert.deepEqual(previous, original);
+  assert.equal(await remove("nope"), null);
+});
+
+test("Undo restores the removed chapter even if a sync rewrote the tombstone lower", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+  const previous = await remove(original.id);
+
+  // A stale device's newer deletion, at chapter 10, merges into the tombstone.
+  data.series[original.id] = {
+    ...data.series[original.id],
+    chapter: "10",
+    chapterUrl: "https://www.manganami.com/manga/witch-and-mercenary/chapter-10",
+    updatedAt: "2099-01-01T00:00:00.000Z",
+  };
+
+  const restored = await restore(original.id, previous);
+  assert.equal(restored.deleted, false);
+  assert.equal(restored.chapter, "40");
+  assert.equal(restored.chapterUrl, original.chapterUrl);
+});
+
+test("Undo keeps further progress the tombstone picked up, never moving back", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+  const previous = await remove(original.id);
+  data.series[original.id] = { ...data.series[original.id], chapter: "55", chapterUrl: "https://x.test/c55" };
+
+  const restored = await restore(original.id, previous);
+  assert.equal(restored.chapter, "55");
+});
+
+test("Undo's timestamp is strictly newer than the tombstone, even with clock skew", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+  const previous = await remove(original.id);
+  // The tombstone carries a time from a device whose clock runs ahead.
+  const future = "2099-01-01T00:00:00.000Z";
+  data.series[original.id] = { ...data.series[original.id], updatedAt: future };
+
+  const restored = await restore(original.id, previous);
+  assert.ok(restored.updatedAt > future, restored.updatedAt);
+  // ...so the restore wins against that tombstone in a merge.
+  const merged = resolveConflict(restored, { ...data.series[original.id], deleted: true, updatedAt: future });
+  assert.equal(merged.deleted, false);
+  assert.equal(merged.chapter, "40");
+});
+
+test("Undo after the series was saved again at a lower chapter brings back the further one", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+  const previous = await remove(original.id);
+
+  // A save from the popup resurrects it at chapter 10 before Undo is pressed.
+  const resaved = await upsert(
+    parseChapterUrl("https://www.manganami.com/manga/witch-and-mercenary/chapter-10")
+  );
+  assert.equal(resaved.chapter, "10");
+
+  const restored = await restore(original.id, previous);
+  assert.equal(restored.deleted, false);
+  assert.equal(restored.chapter, "40");
+  assert.ok(restored.updatedAt > resaved.updatedAt);
+  assert.equal(restored.dirty, true);
+});
+
+test("Undo leaves a series alone if it was saved again further along", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+  const previous = await remove(original.id);
+  await upsert(parseChapterUrl("https://www.manganami.com/manga/witch-and-mercenary/chapter-41"));
+  const before = structuredClone(data.series[original.id]);
+
+  const result = await restore(original.id, previous);
+  assert.equal(result.chapter, "41");
+  assert.deepEqual(data.series[original.id], before); // no write, nothing re-pushed
+});
+
+test("Remove after a future-stamped Undo still sorts after it", async () => {
+  data.schemaVersion = 5;
+  const original = stored({ chapter: "40" });
+  data.series = { [original.id]: structuredClone(original) };
+  const previous = await remove(original.id);
+  data.series[original.id] = { ...data.series[original.id], updatedAt: "2099-01-01T00:00:00.000Z" };
+  const restored = await restore(original.id, previous);
+
+  await remove(original.id);
+  const tomb = data.series[original.id];
+  assert.ok(tomb.updatedAt > restored.updatedAt, `${tomb.updatedAt} vs ${restored.updatedAt}`);
+  assert.equal(resolveConflict(tomb, restored).deleted, true);
 });
