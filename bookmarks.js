@@ -3,7 +3,7 @@
 // chrome APIs here (the library page reads the tree and hands it in), so the
 // walk is unit-tested in Node. See docs/bookmark-import-plan.md.
 
-import { parseChapterUrl, parseSeriesUrl } from "./parser.js";
+import { BUILTIN_SITES, parseChapterUrl, parseSeriesUrl } from "./parser.js";
 
 // Walk a tree from chrome.bookmarks.getTree() (an array of root nodes).
 // Returns:
@@ -11,8 +11,9 @@ import { parseChapterUrl, parseSeriesUrl } from "./parser.js";
 //   scanned     - bookmarks with a link (folders and separators don't count)
 //   unsupported - of those, how many aren't a supported page
 // `now` (ms) caps bookmark dates: a date in the future (a skewed clock) is
-// treated as now.
-export function collectBookmarks(tree, { now = Date.now() } = {}) {
+// treated as now. `sites` is what counts as supported (sites.js: the
+// built-ins plus the ones you've added).
+export function collectBookmarks(tree, { now = Date.now(), sites = BUILTIN_SITES } = {}) {
   const records = [];
   let scanned = 0;
   let unsupported = 0;
@@ -25,7 +26,7 @@ export function collectBookmarks(tree, { now = Date.now() } = {}) {
     if (Array.isArray(node.children)) for (const child of node.children) stack.push(child);
     if (typeof node.url !== "string") continue; // a folder
     scanned++;
-    const record = bookmarkRecord(node, now);
+    const record = bookmarkRecord(node, now, sites);
     if (record) records.push(record);
     else unsupported++;
   }
@@ -36,15 +37,15 @@ export function collectBookmarks(tree, { now = Date.now() } = {}) {
 // to read. The parsers stamp "now" as the read time (right for a popup save,
 // wrong for an import), so the times are replaced with what the bookmark
 // itself says.
-function bookmarkRecord(node, now) {
-  const chapter = parseChapterUrl(node.url);
+function bookmarkRecord(node, now, sites) {
+  const chapter = parseChapterUrl(node.url, sites);
   if (chapter) {
     const at = bookmarkTime(node, now);
     // When you were at this chapter, as far as Chrome knows: shown as the last
     // read time, and used as the chapter's set time against resets.
     return { ...chapter, lastReadAt: at, progressAt: at };
   }
-  const series = parseSeriesUrl(node.url);
+  const series = parseSeriesUrl(node.url, sites);
   if (series) return { ...series, lastReadAt: null, progressAt: null };
   return null;
 }

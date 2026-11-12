@@ -4,7 +4,10 @@
 // sortable library that stays fast at thousands of entries. Also handles
 // JSON export/import for backup. Loaded as an ES module.
 
-import { parsePageUrl } from "./parser.js";
+import { parsePageUrl, hostOf, siteCovers } from "./parser.js";
+import { getSites, siteNames } from "./sites.js";
+import { onCustomSitesChanged } from "./settings.js";
+import { PENDING_SITE_ADD_KEY } from "./view.js";
 import { migrate, getAll, getLibrary, getOne, upsert, remove, restore, importRecords, OWNER_KEY } from "./storage.js";
 import { getSession, getUserEmail, signOut, SESSION_KEY } from "./auth.js";
 import { syncNow, resolveAccount } from "./sync.js";
@@ -32,6 +35,7 @@ const authStatus = document.getElementById("authStatus");
 const authBtn = document.getElementById("authBtn");
 const syncDot = document.getElementById("syncDot");
 const libraryBtn = document.getElementById("libraryBtn");
+const addSiteBtn = document.getElementById("addSiteBtn");
 const accountPrompt = document.getElementById("accountPrompt");
 const accountPromptTitle = document.getElementById("accountPromptTitle");
 const accountPromptText = document.getElementById("accountPromptText");
@@ -45,10 +49,31 @@ libraryBtn.addEventListener("click", async () => {
   window.close();
 });
 
+// "Add this site": hand the host and page to the library page's Settings
+// (through storage, so the one library tab is reused), then open it.
+let addSiteRequest = null;
+function setAddSite(request) {
+  addSiteRequest = request;
+  addSiteBtn.hidden = !request;
+  if (request) addSiteBtn.setAttribute("aria-label", `Add ${request.host} as a site in Settings`);
+}
+addSiteBtn.addEventListener("click", async () => {
+  if (!addSiteRequest) return;
+  await chrome.storage.local.set({ [PENDING_SITE_ADD_KEY]: { ...addSiteRequest, at: Date.now() } });
+  await chrome.runtime.openOptionsPage();
+  window.close();
+});
+
+// "A, B or C"
+function listNames(names) {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}` : names[0] || "";
+}
+
 const ROW_H = 56; // must match --row-h in popup.css
 const OVERSCAN = 4; // rows rendered above/below the viewport for smooth scroll
 
 let pending = null; // parsed record for the current tab, or null
+let siteNameMap = {}; // { siteId: name } for every site Shiori knows (sites.js)
 let pendingTabId = null; // the tab `pending` came from, so we can navigate it
 // The save area warned that saving moves the series back. Clicking Save after
 // that warning is a deliberate move back, which sync must keep (storage.upsert
@@ -90,12 +115,24 @@ function setGoToSaved(record, url, { sameChapter = false } = {}) {
 
 async function refreshSaveArea() {
   const tab = await getActiveTab();
+  const sites = await getSites();
+  siteNameMap = siteNames(sites);
   pendingTabId = tab?.id ?? null;
-  pending = tab?.url ? parsePageUrl(tab.url) : null;
+  pending = tab?.url ? parsePageUrl(tab.url, sites) : null;
+  setAddSite(null);
 
   if (!pending) {
-    saveInfo.textContent =
-      "Open a chapter or series page on a supported site (MangaRead or NatoManga, now at manganami.com) to save it.";
+    const host = tab?.url ? hostOf(tab.url) : null;
+    const known = host ? sites.find((site) => siteCovers(site, host)) : null;
+    if (known) {
+      saveInfo.textContent = `Open a chapter or series page on ${known.name} to save it.`;
+    } else {
+      const names = sites.map((site) => site.name);
+      saveInfo.textContent =
+        `Open a chapter or series page on a supported site (${listNames(names)}) to save it.` +
+        (host ? ` Or add ${host} as a site.` : "");
+      if (host) setAddSite({ host, url: tab.url });
+    }
     saveBtn.textContent = "Save chapter";
     saveBtn.disabled = true;
     setGoToSaved(null, null);
@@ -301,8 +338,8 @@ function renderItem(r) {
   row.setAttribute(
     "aria-label",
     r.chapter == null
-      ? `${r.title}, plan to read, ${siteLabel(r)}`
-      : `${r.title}, chapter ${r.chapter}, ${siteLabel(r)}`
+      ? `${r.title}, plan to read, ${siteLabel(r, siteNameMap)}`
+      : `${r.title}, chapter ${r.chapter}, ${siteLabel(r, siteNameMap)}`
   );
 
   const open = () => {
@@ -342,7 +379,7 @@ function renderItem(r) {
   const rest = document.createElement("span");
   rest.className = "item-meta";
   const when = relativeTime(r.lastReadAt); // unknown for plan-to-read records
-  rest.textContent = when ? ` · ${siteLabel(r)} · ${when}` : ` · ${siteLabel(r)}`;
+  rest.textContent = when ? ` · ${siteLabel(r, siteNameMap)} · ${when}` : ` · ${siteLabel(r, siteNameMap)}`;
   meta.append(chap, rest);
 
   main.append(title, meta);
@@ -676,6 +713,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   // A switch or merge replaced the library: a pending Undo no longer applies.
   if (changes[OWNER_KEY] && !toastDismiss.hidden && !toastEl.hidden) hideToast();
 });
+// Sites added, edited or removed in Settings (here or in another browser):
+// this page may now be supported, or a site's name changed.
+onCustomSitesChanged(
+  debounce(async () => {
+    await refreshSaveArea(); // updates the site names first
+    await load();
+  }, 150)
+);
 const followLibraryChange = debounce(async () => {
   await load();
   await refreshSaveArea();

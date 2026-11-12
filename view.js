@@ -10,11 +10,18 @@
 const text = (v) => (typeof v === "string" ? v : "");
 const isoOrEmpty = (v) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : "");
 
-// The site name to show for a record: its stored name if that's a string,
-// else its site id. Never interpolate r.siteName directly; it may be any type.
-export function siteLabel(record) {
-  return text(record?.siteName) || text(record?.site);
+// The site name to show for a record. `names` ({ siteId: name }, from
+// sites.js) wins when given: the cloud doesn't store site names, so a pulled
+// record may only carry its id, and renaming a site you added should rename
+// every row. Then its stored name, then its site id. Never interpolate
+// r.siteName directly; it may be any type.
+export function siteLabel(record, names = null) {
+  return text(names?.[record?.site]) || text(record?.siteName) || text(record?.site);
 }
+
+// Where the popup leaves an "Add this site" request ({ host, url, at }) for the
+// library page's Settings to pick up (chrome.storage.local).
+export const PENDING_SITE_ADD_KEY = "pendingSiteAdd";
 
 // A series with no chapter is Plan to read; anything with one is reading.
 export function isPlan(record) {
@@ -70,12 +77,13 @@ export function summarize(records) {
   return { total: reading + plan, reading, plan };
 }
 
-// The sites present in the library, for the site filter: [{ id, name }] by name.
-export function sitesIn(records) {
+// The sites present in the library, for the site filter: [{ id, name }] by
+// name. `names` as for siteLabel.
+export function sitesIn(records, names = null) {
   const seen = new Map();
   for (const r of records) {
     if (r.deleted || typeof r.site !== "string" || !r.site || seen.has(r.site)) continue;
-    seen.set(r.site, text(r.siteName) || r.site);
+    seen.set(r.site, siteLabel(r, names));
   }
   return [...seen].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
 }
