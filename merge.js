@@ -87,6 +87,9 @@ function laterSet(local, remote) {
   return local;
 }
 
+// The chapter fields of a series with no usable progress (Plan to read).
+const PLAN = { chapter: null, chapterUrl: null, status: "plan", lastReadAt: null, progressAt: null };
+
 // The later of two ISO timestamps (either may be missing).
 function laterOf(a, b) {
   if (!a) return b || null;
@@ -125,8 +128,11 @@ export function resolveConflict(local, remote) {
   if (!deleted && older.deleted === true) {
     // A newer save brought a deleted series back. The deletion ended the old
     // reading history, so the tombstone's chapter doesn't compete: the series
-    // restarts from the resurrecting save (which may be Plan to read).
-    chapterSource = newer;
+    // restarts from the resurrecting save (which may be Plan to read). That
+    // save's chapter still has to be from after the removal: an import of an
+    // old bookmark is newer than a removal this device hadn't seen, but its
+    // chapter isn't, so the series comes back as Plan to read (Codex review).
+    chapterSource = counts(newer) || !hasChapter(newer.chapter) ? newer : PLAN;
   } else if (!deleted) {
     const lCounts = counts(local);
     const rCounts = counts(remote);

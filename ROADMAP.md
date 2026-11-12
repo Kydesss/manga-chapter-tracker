@@ -36,12 +36,13 @@ grows into a small cross-platform service.
   library's owner), the full-page library, account isolation, and storage/sync fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
   updates**) was removed before release. See
   [Site bookmark import](#paused-site-bookmark-import).
-- **In progress:** cloud schema v2 (Sync hardening), on `feat/cloud-schema-v2`: Plan to
-  read syncs, a server change order for the sync cursor, and a synced progress reset
-  marker ([cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)). The migration is
-  applied to the live project (2026-11-12); installs need this build to keep syncing. Next in Bundle A: Settings and browser-bookmark import, on top of the full-page library
-  ([library-page-plan.md](./docs/library-page-plan.md)). Site bookmark import is paused
-  with no site planned.
+- **Shipped to `master`:** cloud schema v2 (PR #8): Plan to read syncs, a server change
+  order for the sync cursor, and a synced progress reset marker
+  ([cloud-schema-v2-plan.md](./docs/cloud-schema-v2-plan.md)), applied to the live
+  project on 2026-11-12.
+- **In progress:** browser-bookmark import (Bundle A), on `feat/bookmark-import`
+  ([bookmark-import-plan.md](./docs/bookmark-import-plan.md)). Next in Bundle A:
+  Settings. Site bookmark import is paused with no site planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
   chapters and series.
 - **Surfaces:** Chrome extension.
@@ -150,15 +151,18 @@ the app. Building these together avoids doing the card UI and status plumbing tw
   page as Plan to read (the parser recognizes series pages), "saving a chapter flips it
   to reading," and the sync rule in `merge.js`. Syncing Plan-to-read records is in
   progress with cloud schema v2 (see Sync hardening).
-- **Bulk import of browser bookmarks.** One-click import (the `bookmarks` permission)
-  that filters to supported/custom sites, parses each URL, dedupes by furthest chapter,
-  and marks records dirty to sync. Preview/confirm UI lives in the app. Covers readers
-  whose bookmarks live in the browser. The forward-only bulk write it needs,
-  `bulkUpsert`, is back in `storage.js`: it dedupes, never moves a series backward, and
-  by default doesn't bring back series the user removed (`restoreDeleted` opts in).
+- **Bulk import of browser bookmarks** *(in progress, `feat/bookmark-import`; see
+  [bookmark-import-plan.md](./docs/bookmark-import-plan.md))*. **Import bookmarks** on
+  the library page asks for the optional `bookmarks` permission, keeps bookmarks on
+  supported sites, and previews what would change before anything is written. It
+  imports through `bulkUpsert`, which dedupes to the furthest chapter, never moves a
+  series back, leaves removed series alone, and now respects resets, using each
+  bookmark's own date as its chapter's set time. Later: a folder picker, per-item
+  selection, custom sites (Bundle B).
 
 **Open questions.** Grid vs list density; how much management (bulk ops) in v1; whether
-the app is also the extension's options page; folder scoping for import.
+the app is also the extension's options page (yes); folder scoping for import (all
+bookmarks in v1, with a preview).
 
 ---
 

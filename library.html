@@ -15,9 +15,12 @@
           <img src="icons/logo.svg" width="28" height="28" alt="" aria-hidden="true" />
           <h1>Shiori <span class="brand-sub">Library</span></h1>
         </div>
-        <div class="sync" title="Sign in and out from the toolbar popup">
-          <span id="syncDot" class="sync-dot is-signedout" aria-hidden="true"></span>
-          <span id="syncStatus" aria-live="polite">Not signed in</span>
+        <div class="masthead-actions">
+          <div class="sync" title="Sign in and out from the toolbar popup">
+            <span id="syncDot" class="sync-dot is-signedout" aria-hidden="true"></span>
+            <span id="syncStatus" aria-live="polite">Not signed in</span>
+          </div>
+          <button id="importBtn" type="button" class="btn">Import bookmarks</button>
         </div>
       </header>
 
@@ -58,10 +61,25 @@
             Open a chapter on MangaRead or NatoManga and save it from the Shiori toolbar
             button, or save a series page as Plan to read.
           </p>
+          <button id="importEmptyBtn" type="button" class="btn primary empty-import">Import bookmarks</button>
         </div>
         <p id="noResults" class="empty" hidden>No series match these filters.</p>
       </main>
     </div>
+
+    <!-- Bookmark import preview (docs/bookmark-import-plan.md). Nothing is
+         written until Import is pressed; Esc or Cancel closes it. -->
+    <dialog id="importDialog" class="import-dialog" aria-labelledby="importTitle" aria-describedby="importSummary">
+      <div class="import-body">
+        <h2 id="importTitle" class="import-title">Import bookmarks</h2>
+        <p id="importSummary" class="import-summary"></p>
+        <div id="importGroups" class="import-groups"></div>
+        <div class="import-actions">
+          <button id="importCancel" type="button" class="btn">Cancel</button>
+          <button id="importConfirm" type="button" class="btn primary">Import</button>
+        </div>
+      </div>
+    </dialog>
 
     <!-- Confirmation messages, with an optional action (Undo). -->
     <div id="toast" class="toast" role="status" aria-live="polite" hidden>

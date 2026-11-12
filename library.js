@@ -2,13 +2,16 @@
 // The full-page library (also the extension's options page). Filters the same
 // library the popup shows by status, site, and title; sorts it; and offers
 // per-series actions: Continue/Start (a read-only jump to your place), Series,
-// and Remove with Undo. Design: docs/library-page-plan.md.
+// and Remove with Undo. Design: docs/library-page-plan.md. Also imports
+// browser bookmarks, with a preview first: docs/bookmark-import-plan.md.
 //
 // Never moves a reading position: there's deliberately no "set chapter" here
 // yet, because sync's furthest-chapter rule would undo a backward move (see the
 // plan's "Why Set current chapter is deferred").
 
-import { migrate, getLibrary, remove, restore, OWNER_KEY } from "./storage.js";
+import { migrate, getLibrary, remove, restore, previewBulkUpsert, bulkUpsert, OWNER_KEY } from "./storage.js";
+import { collectBookmarks } from "./bookmarks.js";
+import { SITES } from "./parser.js";
 import { getSession, getUserEmail, SESSION_KEY } from "./auth.js";
 import { syncNow } from "./sync.js";
 import {
@@ -39,6 +42,13 @@ const syncDot = $("syncDot");
 const syncStatus = $("syncStatus");
 const tabs = [...document.querySelectorAll(".tab")];
 const toolbarEl = document.querySelector(".toolbar");
+const importBtn = $("importBtn");
+const importEmptyBtn = $("importEmptyBtn");
+const importDialog = $("importDialog");
+const importSummary = $("importSummary");
+const importGroups = $("importGroups");
+const importCancel = $("importCancel");
+const importConfirm = $("importConfirm");
 
 const OVERSCAN = 6;
 const TOAST_MS = 2500; // plain confirmations only; Undo never times out
@@ -438,6 +448,215 @@ function debounce(fn, ms) {
     t = setTimeout(() => fn(...args), ms);
   };
 }
+
+// --- Bookmark import ---------------------------------------------------------
+//
+// Read Chrome's bookmarks (with the optional `bookmarks` permission, asked for
+// on click), preview what bulkUpsert would do, and only write on Import. The
+// preview and the write run the same plan (storage.js planBulkUpsert); the
+// write re-plans under the library lock and is refused if the library was
+// switched to another account meanwhile.
+
+const SITE_NAMES = SITES.map((s) => s.name).join(" or ");
+
+// Preview groups, in display order. `open`: expanded at first.
+const IMPORT_GROUPS = [
+  { outcomes: ["advanced"], label: "Moves forward", open: true, detail: (i) => `${i.from ?? "Plan"} → ${i.chapter}` },
+  { outcomes: ["added-reading"], label: "New, reading", open: true, detail: (i) => `Chapter ${i.chapter}` },
+  { outcomes: ["added-plan"], label: "New, plan to read", open: true, detail: () => "Plan to read" },
+  {
+    outcomes: ["before-reset"],
+    label: "Skipped: from before you moved back",
+    note: "You moved these back to an earlier chapter (or removed and restarted them) after this bookmark was made, so it doesn't count.",
+    open: true,
+    detail: (i) => `Bookmark: ${i.chapter} · Saved: ${i.from ?? "plan"}`,
+  },
+  {
+    outcomes: ["older-bookmark"],
+    label: "Skipped: older than your saved place",
+    note: "You saved a chapter of these after the bookmark was made, so the bookmark doesn't move them.",
+    detail: (i) => `Bookmark: ${i.chapter} · Saved: ${i.from ?? "plan"}`,
+  },
+  {
+    outcomes: ["removed"],
+    label: "Skipped: you removed these",
+    note: "Removed series stay removed. Save one from its page to bring it back.",
+    detail: (i) => (i.chapter ? `Chapter ${i.chapter}` : "Series"),
+  },
+  {
+    outcomes: ["unchanged", "enriched"],
+    label: "Already up to date",
+    detail: (i) => (i.from ? `Chapter ${i.from}` : "Plan to read"),
+  },
+];
+
+let pendingImport = null; // { records, epoch, trigger }
+let importing = false; // the write is running: the dialog can't be closed
+let importBusy = false; // an import is under way, from the click until the dialog closes
+
+async function startImport(trigger) {
+  // One at a time: a second click while the first is reading bookmarks would
+  // reopen a cancelled preview, or replace the plan mid-write (Codex review).
+  if (importBusy) return;
+  importBusy = true;
+  setImportButtonsDisabled(true);
+  let opened = false;
+  try {
+    opened = await openImportPreview(trigger);
+  } finally {
+    if (!opened) endImport();
+  }
+}
+
+function setImportButtonsDisabled(disabled) {
+  importBtn.disabled = disabled;
+  importEmptyBtn.disabled = disabled;
+}
+
+function endImport() {
+  importBusy = false;
+  setImportButtonsDisabled(false);
+}
+
+// Returns whether the preview opened (it then ends the import on close).
+async function openImportPreview(trigger) {
+  // Must run straight from the click: Chrome only shows the prompt for a
+  // user gesture.
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ permissions: ["bookmarks"] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showToast("Shiori wasn't allowed to read your bookmarks, so nothing was imported");
+    return false;
+  }
+  let found;
+  let plan;
+  try {
+    found = collectBookmarks(await chrome.bookmarks.getTree());
+    plan = await previewBulkUpsert(found.records);
+  } catch (err) {
+    showToast(`Couldn't read your bookmarks: ${err?.message || err}`);
+    return false;
+  }
+  pendingImport = { records: found.records, epoch: plan.epoch, trigger };
+  renderImportPreview(found, plan);
+  importDialog.showModal();
+  (importConfirm.disabled ? importCancel : importConfirm).focus();
+  return true;
+}
+
+function renderImportPreview(found, plan) {
+  const changes = plan.added + plan.advanced;
+  const series = plan.processed;
+  if (!found.scanned) {
+    importSummary.textContent = "You don't have any bookmarks yet.";
+  } else if (!series) {
+    importSummary.textContent = `None of your ${count(found.scanned, "bookmark")} is a chapter or series page on ${SITE_NAMES}.`;
+  } else {
+    importSummary.textContent =
+      `${count(found.scanned - found.unsupported, "bookmark")} on ${SITE_NAMES}, ` +
+      `covering ${count(series, "series", "series")}. ` +
+      (changes ? "Nothing is saved until you press Import." : "Your library already has everything here.");
+  }
+
+  importGroups.replaceChildren();
+  for (const group of IMPORT_GROUPS) {
+    const items = plan.items.filter((i) => group.outcomes.includes(i.outcome));
+    if (!items.length) continue;
+    items.sort((a, b) => a.title.localeCompare(b.title));
+    const details = document.createElement("details");
+    details.className = "import-group";
+    details.open = !!group.open;
+    const summary = document.createElement("summary");
+    summary.textContent = `${group.label} (${items.length})`;
+    details.append(summary);
+    if (group.note) {
+      const note = document.createElement("p");
+      note.className = "import-group-note";
+      note.textContent = group.note;
+      details.append(note);
+    }
+    const list = document.createElement("ul");
+    for (const item of items) {
+      const li = document.createElement("li");
+      const title = document.createElement("span");
+      title.className = "import-item-title";
+      title.textContent = item.title;
+      title.title = `${item.title} (${siteLabel(item)})`;
+      const detail = document.createElement("span");
+      detail.className = "import-item-detail";
+      detail.textContent = group.detail(item);
+      li.append(title, detail);
+      list.append(li);
+    }
+    details.append(list);
+    importGroups.append(details);
+  }
+
+  importConfirm.disabled = changes === 0;
+  importConfirm.textContent = changes ? `Import ${count(changes, "series", "series")}` : "Nothing to import";
+  importCancel.textContent = changes ? "Cancel" : "Close";
+}
+
+async function confirmImport() {
+  if (!pendingImport || importing) return;
+  importConfirm.disabled = true;
+  importCancel.disabled = true;
+  importing = true;
+  const { records, epoch } = pendingImport;
+  let result;
+  try {
+    result = await bulkUpsert(records, { epoch });
+  } catch (err) {
+    result = { error: err?.message || String(err) };
+  }
+  importing = false;
+  importCancel.disabled = false;
+  // An import that added series replaces the empty state (and its button)
+  // once the list re-renders, after the dialog has closed: return focus to
+  // the header button, which stays.
+  if (result.added || result.advanced) pendingImport.trigger = importBtn;
+  importDialog.close();
+  if (result.error) {
+    showToast(`Import failed: ${result.error}`);
+  } else if (result.stale) {
+    showToast("Your library switched accounts while the preview was open, so nothing was imported");
+  } else {
+    showToast(importResultText(result));
+    runSync(); // push the imported series if signed in
+  }
+}
+
+function importResultText(r) {
+  const parts = [];
+  if (r.added) parts.push(`${r.added} added`);
+  if (r.advanced) parts.push(`${r.advanced} moved forward`);
+  return parts.length ? `Imported: ${parts.join(", ")}` : "Nothing new to import";
+}
+
+function count(n, singular, plural = `${singular}s`) {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+importBtn.addEventListener("click", () => startImport(importBtn));
+importEmptyBtn.addEventListener("click", () => startImport(importEmptyBtn));
+importCancel.addEventListener("click", () => importDialog.close());
+importConfirm.addEventListener("click", confirmImport);
+// Esc closes the preview, but not while the import is being written.
+importDialog.addEventListener("cancel", (e) => {
+  if (importing) e.preventDefault();
+});
+importDialog.addEventListener("close", () => {
+  const trigger = pendingImport?.trigger;
+  pendingImport = null;
+  endImport();
+  // Back to the button that opened it (the empty-state one may be gone now).
+  if (trigger && trigger.isConnected && !trigger.closest("[hidden]")) trigger.focus();
+  else importBtn.focus();
+});
 
 // --- Start -----------------------------------------------------------------
 
