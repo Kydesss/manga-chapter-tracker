@@ -288,6 +288,8 @@ function focusRow(id) {
 let toastTimer;
 function showToast(message, action = null) {
   clearTimeout(toastTimer);
+  // Replacing a message whose Undo had focus: don't strand focus on it.
+  const hadFocus = toastEl.contains(document.activeElement);
   toastText.textContent = message;
   toastAction.hidden = !action;
   toastDismiss.hidden = !action;
@@ -302,7 +304,8 @@ function showToast(message, action = null) {
     toastTimer = setTimeout(hideToast, TOAST_MS);
   }
   toastEl.hidden = false;
-  if (action?.focus) toastAction.focus();
+  if (action?.focus || (hadFocus && action)) toastAction.focus();
+  else if (hadFocus) searchInput.focus();
 }
 
 function hideToast() {

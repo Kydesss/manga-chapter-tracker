@@ -10,6 +10,7 @@ import {
   safeUrl,
   relativeTime,
   compareChapters,
+  shortcutSaveDecision,
   isPlan,
   escapeHtml,
   siteLabel,
@@ -227,4 +228,36 @@ test("result gate: a sign-out shown by a newer call can't be undone by an older 
   assert.equal(gate.accept(signOut), true);
   gate.shown(signOut);
   assert.equal(gate.accept(olderSync), false, "the stale 'Synced' must not come back");
+});
+
+// --- The save-chapter keyboard shortcut ---------------------------------------
+
+const chapterPage = (chapter) => ({ id: "natomanga.com:a", chapter, chapterUrl: `https://x.test/${chapter}` });
+const seriesPage = { id: "natomanga.com:a", chapter: null, chapterUrl: null };
+const savedAt = (chapter) => ({ id: "natomanga.com:a", chapter, chapterUrl: chapter == null ? null : `https://x.test/${chapter}` });
+
+test("the shortcut saves a new chapter, a further one, the same one again, or a planned series' first chapter", () => {
+  assert.equal(shortcutSaveDecision(chapterPage("5"), null).action, "save");
+  assert.equal(shortcutSaveDecision(chapterPage("6"), savedAt("5")).action, "save");
+  assert.equal(shortcutSaveDecision(chapterPage("5"), savedAt("5")).action, "save");
+  assert.equal(shortcutSaveDecision(chapterPage("1"), savedAt(null)).action, "save");
+});
+
+test("the shortcut never moves a series back: the popup asks first for that", () => {
+  assert.equal(shortcutSaveDecision(chapterPage("4"), savedAt("5")).action, "moves-back");
+  assert.equal(shortcutSaveDecision(chapterPage("4.5"), savedAt("5")).action, "moves-back");
+});
+
+test("labels that can't be ranked save, as the popup's button does", () => {
+  assert.equal(shortcutSaveDecision(chapterPage("5"), savedAt("Extra")).action, "save");
+});
+
+test("on a series page the shortcut plans it, or says it's already saved", () => {
+  assert.equal(shortcutSaveDecision(seriesPage, null).action, "save");
+  assert.equal(shortcutSaveDecision(seriesPage, savedAt("5")).action, "already-reading");
+  assert.equal(shortcutSaveDecision(seriesPage, savedAt(null)).action, "already-planned");
+});
+
+test("the shortcut does nothing on an unsupported page", () => {
+  assert.equal(shortcutSaveDecision(null, null).action, "unsupported");
 });

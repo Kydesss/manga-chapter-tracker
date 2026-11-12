@@ -345,10 +345,42 @@ export async function count() {
 export async function upsert(record, { resetProgress = false } = {}) {
   return withLibraryLock(async () => {
     const map = await readMap();
-    const existing = map[record.id];
-    if (!hasChapter(record.chapter) && existing && !existing.deleted && hasChapter(existing.chapter)) {
-      return existing;
-    }
+    const before = map[record.id];
+    const saved = applySave(map, record, { resetProgress });
+    if (saved !== before) await writeMap(map); // a real save makes a new record
+    return saved;
+  });
+}
+
+// Decide and save in one locked step: `decide(record, existing)` sees the
+// series as it is under the lock (existing: the saved series, or null if
+// absent or removed) and returns { action }. Only "save" writes, exactly as
+// upsert does. Returns { action, saved } or { action, existing }. The
+// keyboard shortcut uses this so a save that lands between its check and its
+// write (another device's sync, the popup) can't be overwritten by a stale
+// decision, and an account switch can't slip in between (Codex review).
+export async function saveIfAllowed(record, decide) {
+  return withLibraryLock(async () => {
+    const map = await readMap();
+    const current = map[record.id];
+    const existing = current && !current.deleted ? current : null;
+    const decision = decide(record, existing) || {};
+    if (decision.action !== "save") return { ...decision, existing };
+    const saved = applySave(map, record);
+    await writeMap(map);
+    return { ...decision, saved };
+  });
+}
+
+// The body of a save, applied to `map` in place (the caller holds the lock
+// and writes). Returns the series as saved, or the existing one unchanged for
+// a Plan-to-read save on a series being read.
+function applySave(map, record, { resetProgress = false } = {}) {
+  const existing = map[record.id];
+  if (!hasChapter(record.chapter) && existing && !existing.deleted && hasChapter(existing.chapter)) {
+    return existing;
+  }
+  {
     // Never older than the record it replaces (a tombstone or a save stamped
     // ahead of this device's clock), so the save wins merges on recency.
     const updatedAt = existing ? stampAfter(record.updatedAt, existing.updatedAt) : record.updatedAt;
@@ -370,9 +402,8 @@ export async function upsert(record, { resetProgress = false } = {}) {
     if (resetProgress && hasChapter(record.chapter)) {
       map[record.id].progressResetAt = map[record.id].updatedAt;
     }
-    await writeMap(map);
     return map[record.id];
-  });
+  }
 }
 
 // Merge many imported records (browser bookmarks today; a site importer if one

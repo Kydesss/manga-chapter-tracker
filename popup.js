@@ -5,7 +5,7 @@
 // JSON export/import for backup. Loaded as an ES module.
 
 import { parsePageUrl } from "./parser.js";
-import { migrate, getAll, getLibrary, getOne, upsert, remove, importRecords, OWNER_KEY } from "./storage.js";
+import { migrate, getAll, getLibrary, getOne, upsert, remove, restore, importRecords, OWNER_KEY } from "./storage.js";
 import { getSession, getUserEmail, signOut, SESSION_KEY } from "./auth.js";
 import { syncNow, resolveAccount } from "./sync.js";
 import { viewSeries, safeUrl, compareChapters, relativeTime, escapeHtml, siteLabel, createResultGate } from "./view.js";
@@ -22,6 +22,9 @@ const emptyEl = document.getElementById("empty");
 const noResultsEl = document.getElementById("noResults");
 const countEl = document.getElementById("count");
 const toastEl = document.getElementById("toast");
+const toastText = document.getElementById("toastText");
+const toastAction = document.getElementById("toastAction");
+const toastDismiss = document.getElementById("toastDismiss");
 const exportBtn = document.getElementById("exportBtn");
 const importBtn = document.getElementById("importBtn");
 const importFile = document.getElementById("importFile");
@@ -66,18 +69,21 @@ async function getActiveTab() {
 // shared with the library page.
 
 // The secondary "go to your saved chapter" action. Hidden unless this tab is a
-// different chapter of a series we already track.
-function setGoToSaved(record, url) {
+// different chapter of a series we already track, or a different page of the
+// saved chapter (`sameChapter`: labelled "your saved page").
+function setGoToSaved(record, url, { sameChapter = false } = {}) {
   if (!record || !url) {
     goSavedBtn.hidden = true;
     delete goSavedBtn.dataset.url;
     return;
   }
   goSavedBtn.hidden = false;
-  goSavedBtn.textContent = `Go to chapter ${record.chapter}`;
+  goSavedBtn.textContent = sameChapter ? "Go to your saved page" : `Go to chapter ${record.chapter}`;
   goSavedBtn.setAttribute(
     "aria-label",
-    `Go to your saved chapter ${record.chapter} of ${record.title}, without changing it`
+    sameChapter
+      ? `Go to your saved page of chapter ${record.chapter} of ${record.title}, without changing it`
+      : `Go to your saved chapter ${record.chapter} of ${record.title}, without changing it`
   );
   goSavedBtn.dataset.url = url;
 }
@@ -107,6 +113,7 @@ async function refreshSaveArea() {
   }
   let note = "";
   let savedUrl = null;
+  let sameChapterJump = false;
   if (existing) {
     const dir = existing.chapter == null ? NaN : compareChapters(pending.chapter, existing.chapter);
     if (existing.chapter == null) {
@@ -140,10 +147,13 @@ async function refreshSaveArea() {
     // Offer the jump whenever the saved chapter is a different one (either
     // direction: you can overshoot as easily as you can fall behind). Skip it
     // when the saved link is unusable, or is the page you're already on.
-    if (dir !== 0) {
-      savedUrl = safeUrl(existing.chapterUrl);
-      if (savedUrl && savedUrl === safeUrl(pending.chapterUrl)) savedUrl = null;
-    }
+    // Within the same chapter, offer it when the saved link is a different
+    // page of it (/chapter-100/12 saved, /chapter-100/2 open); a different
+    // query string or #anchor alone doesn't count.
+    savedUrl = safeUrl(existing.chapterUrl);
+    if (savedUrl && dir === 0 && samePath(savedUrl, pending.chapterUrl)) savedUrl = null;
+    if (savedUrl && savedUrl === safeUrl(pending.chapterUrl)) savedUrl = null;
+    sameChapterJump = dir === 0;
   } else {
     saveBtn.textContent = "Save chapter";
   }
@@ -155,7 +165,15 @@ async function refreshSaveArea() {
       pending.chapter
     )} on ${escapeHtml(pending.siteName)}` + note;
   saveBtn.disabled = false;
-  setGoToSaved(existing, savedUrl);
+  setGoToSaved(existing, savedUrl, { sameChapter: sameChapterJump });
+}
+
+function samePath(a, b) {
+  try {
+    return new URL(a).pathname.replace(/\/$/, "") === new URL(b).pathname.replace(/\/$/, "");
+  } catch {
+    return false;
+  }
 }
 
 // The save area on a series page: the only thing to save is "plan to read".
@@ -297,6 +315,10 @@ function renderItem(r) {
   };
   row.addEventListener("click", open);
   row.addEventListener("keydown", (e) => {
+    // Only keys aimed at the row itself. Enter or Space on the remove button
+    // bubbles up here too, and handling it would cancel the button's own
+    // press and open the series instead of removing it.
+    if (e.target !== row) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       open();
@@ -333,13 +355,20 @@ function renderItem(r) {
   const epoch = libraryEpoch; // the library this row was drawn from
   del.addEventListener("click", async (e) => {
     e.stopPropagation();
+    // A keyboard press (detail 0) loses its focus with the row: move it to Undo.
+    const fromKeyboard = e.detail === 0;
     const removed = await remove(r.id, { epoch });
     await load();
+    await refreshSaveArea(); // the save area may describe this series
     if (removed === false) {
       showToast("The library changed; nothing was removed");
       return;
     }
-    showToast(`Removed ${r.title}`);
+    showToast(`Removed ${r.title}`, {
+      label: "Undo",
+      focus: fromKeyboard,
+      run: () => undoRemove(r, removed),
+    });
     runSync(); // push the tombstone so the deletion propagates
   });
 
@@ -387,12 +416,61 @@ importFile.addEventListener("change", async () => {
 
 // --- Helpers --------------------------------------------------------------
 
+// A plain message hides itself after a moment. One with an action (Undo) has
+// no deadline: it stays until used, dismissed (×), replaced by the next
+// message, or the popup closes, so nobody runs out of time to reach it.
 let toastTimer;
-function showToast(msg) {
-  toastEl.textContent = msg;
-  toastEl.hidden = false;
+function showToast(msg, action = null) {
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (toastEl.hidden = true), 2000);
+  // Replacing a message whose Undo had focus: don't leave focus on a button
+  // that's about to disappear (Codex review).
+  const hadFocus = toastEl.contains(document.activeElement);
+  toastText.textContent = msg;
+  toastAction.hidden = !action;
+  toastDismiss.hidden = !action;
+  toastAction.onclick = null;
+  if (action) {
+    toastAction.textContent = action.label;
+    toastAction.onclick = () => {
+      hideToast();
+      action.run();
+    };
+  } else {
+    toastTimer = setTimeout(hideToast, 2000);
+  }
+  toastEl.hidden = false;
+  if (action?.focus || (hadFocus && action)) toastAction.focus();
+  else if (hadFocus) searchInput.focus();
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  // Don't strand keyboard focus on a button that's about to disappear.
+  const hadFocus = toastEl.contains(document.activeElement);
+  toastEl.hidden = true;
+  toastAction.onclick = null;
+  if (hadFocus) searchInput.focus();
+}
+
+toastDismiss.addEventListener("click", hideToast);
+
+// Undo a Remove: storage.restore brings the series back at the furthest
+// chapter it knew, and refuses (false) if the library was switched or merged
+// since, so one account's series can't land in another's library.
+async function undoRemove(r, previous) {
+  const restored = await restore(r.id, previous);
+  await load();
+  await refreshSaveArea();
+  if (restored === false) {
+    showToast("The library changed; nothing was restored");
+    return;
+  }
+  if (!restored) {
+    showToast(`${r.title} is already back`);
+    return;
+  }
+  showToast(`Restored ${r.title}`);
+  runSync(); // push the restore so it wins over the tombstone everywhere
 }
 
 function debounce(fn, ms) {
@@ -592,7 +670,16 @@ async function runSync(opts = {}) {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes[SESSION_KEY] || changes[OWNER_KEY]) followAccountChange();
+  // Another context changed the library (the keyboard shortcut, the library
+  // page, a sync pass): show it here too (Codex review).
+  if (changes.series) followLibraryChange();
+  // A switch or merge replaced the library: a pending Undo no longer applies.
+  if (changes[OWNER_KEY] && !toastDismiss.hidden && !toastEl.hidden) hideToast();
 });
+const followLibraryChange = debounce(async () => {
+  await load();
+  await refreshSaveArea();
+}, 150);
 const followAccountChange = debounce(async () => {
   await refreshAuthUI();
   await load();

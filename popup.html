@@ -84,8 +84,13 @@
       </span>
     </footer>
 
-    <!-- Brief confirmation messages. aria-live so screen readers announce them. -->
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <!-- Brief confirmation messages, with an optional action (Undo). aria-live
+         so screen readers announce them. -->
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+      <span id="toastText" class="toast-text"></span>
+      <button id="toastAction" type="button" class="toast-action" hidden></button>
+      <button id="toastDismiss" type="button" class="toast-dismiss" aria-label="Dismiss" title="Dismiss" hidden>×</button>
+    </div>
 
     <script type="module" src="popup.js"></script>
   </body>

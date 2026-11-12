@@ -137,3 +137,43 @@ test("a cloud row with old NatoManga links merges cleanly with a migrated local 
   const { changedIds } = mergeRemoteIntoLocal({ [local.id]: local }, [remote]);
   assert.deepEqual(changedIds, []); // no spurious change, nothing to push
 });
+
+// --- URL variants (polish batch) ---------------------------------------------
+
+test("a page number after the chapter is the same chapter, and the link keeps the page", () => {
+  for (const url of [
+    "https://www.manganami.com/manga/blue-lock/chapter-100/2",
+    "https://www.manganami.com/manga/blue-lock/chapter-100/2/",
+  ]) {
+    const r = parseChapterUrl(url);
+    assert.equal(r.id, "natomanga.com:blue-lock");
+    assert.equal(r.chapter, "100");
+    assert.equal(r.chapterUrl, url);
+  }
+});
+
+test("a volume prefix is accepted; the chapter number is the label", () => {
+  assert.equal(parseChapterUrl("https://www.manganami.com/manga/blue-lock/vol-2-chapter-5").chapter, "5");
+  const mr = parseChapterUrl("https://www.mangaread.org/manga/blue-lock/volume-3-chapter-12-5/");
+  assert.equal(mr.chapter, "12.5");
+  assert.equal(mr.id, "mangaread.org:blue-lock");
+});
+
+test("query strings and anchors don't stop a chapter or series page from parsing", () => {
+  const r = parseChapterUrl("https://www.mangaread.org/manga/blue-lock/chapter-5/?style=list#p3");
+  assert.equal(r.chapter, "5");
+  assert.equal(r.chapterUrl, "https://www.mangaread.org/manga/blue-lock/chapter-5/?style=list#p3", "kept for Continue");
+  assert.equal(parseSeriesUrl("https://www.mangaread.org/manga/blue-lock/?ref=x#top").id, "mangaread.org:blue-lock");
+});
+
+test("other pages under a chapter, and malformed variants, are not chapters", () => {
+  for (const url of [
+    "https://www.manganami.com/manga/blue-lock/chapter-100/comments",
+    "https://www.manganami.com/manga/blue-lock/chapter-100/2/3",
+    "https://www.manganami.com/manga/blue-lock/vol-x-chapter-5",
+    "https://www.manganami.com/manga/blue-lock/vol-2",
+    "https://www.manganami.com/manga/blue-lock/vol-2-chapter-",
+  ]) {
+    assert.equal(parseChapterUrl(url), null, url);
+  }
+});
