@@ -343,6 +343,34 @@ applied again.
 
 ---
 
+## 16. Dropping MangaRead, keeping the foundation
+
+The NatoManga scraper was removed before release, which left MangaRead as the only
+planned site importer. On 2026-11-12, after a pass over the roadmap to see what was
+still unbuilt, Joaquin cut that too:
+
+> "Let's remove MangaRead importer from the roadmap. Then let's go with your
+> recommendation."
+
+The recommendation had been to build the shared pieces first: an adapter interface for
+site importers, a single forward-only bulk write, and saving a series page as Plan to
+read. With no site importer left, the adapter interface had nothing to serve, so it was
+deferred rather than built speculatively. The other two still earned their place.
+Browser-bookmark import (Bundle A) needs the same bulk write, and Plan to read had quietly
+lost its only entry point when the scraper left: nothing in the app could create a
+plan-to-read record anymore.
+
+Building the series-page save surfaced a "progress is sacred" trap. The existing `upsert`
+would have let a Plan to read press on a series already being read blank out its
+chapter. The fix makes a plan save a no-op on a series in progress. The restored bulk
+write also settled one of section 15's open questions by default: an import no longer
+brings back a series the user removed, unless the caller asks it to.
+
+**Why it mattered.** Restraint applied to the roadmap itself: cutting a feature without
+throwing away the foundation it shared with features that are still coming.
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."

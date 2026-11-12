@@ -7,6 +7,10 @@ tags:
 
 # Plan: MangaRead Bookmark Import
 
+> **Dropped 2026-11-12.** The MangaRead importer was taken off the roadmap. This page stays
+> as research notes (Madara markup, signed-out behavior, series-page structure) in case a
+> site importer comes back. The shared `bulkUpsert` it relied on is back in `storage.js`.
+
 **Status:** planning only; nothing is built yet. Written 2026-09-23 after reviewing the
 NatoManga importer on the `autoscraper` branch
 ([natomanga-bookmark-import-plan.md](./natomanga-bookmark-import-plan.md)). Start

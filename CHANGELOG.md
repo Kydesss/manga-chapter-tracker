@@ -19,6 +19,32 @@ fixes, and the JSON import fixes. The importer's design and pre-merge review sta
 [docs/natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md) for
 reference.
 
+### Added since the removal
+- **Plan to read from a series page.** Open a series' main page on MangaRead or
+  NatoManga (`/manga/{slug}`) and the save area offers **Plan to read**. The series
+  joins the library with no chapter, and the first chapter you save from it flips it to
+  reading. On a series you're already reading, the save area shows your saved chapter
+  with **Go to chapter X** instead. A plan save never erases a chapter: `upsert` leaves
+  a series you're reading untouched. Planning a series you removed adds it back fresh,
+  as Plan to read. New parser entry points: `parseSeriesUrl` and `parsePageUrl`.
+- **`bulkUpsert` is back, without a site attached.** The shared forward-only bulk write,
+  for browser-bookmark import (Bundle A) or a future site importer. One locked read and
+  write; duplicates collapse to the furthest chapter; a series only moves forward, and
+  labels that can't be ranked ("Extra") never advance one; unknown metadata never erases
+  known metadata; metadata-only changes don't queue a sync. New: series the user removed
+  stay removed unless the caller passes `restoreDeleted: true`, and are counted as
+  `removed`. When duplicates collapse, the furthest chapter wins but a real title and
+  known metadata are kept from any duplicate. Nothing calls it yet.
+- Tests: 31 → 50 (series parsing, the plan-save guard, `bulkUpsert`, and resurrection).
+
+### Changed since the removal
+- **Merge rule: a resurrection restarts the series.** When a newer save brings back a
+  deleted series, the tombstone's old chapter no longer wins under "furthest chapter".
+  Without this, planning a removed series while signed in would turn back into Reading
+  at the old chapter once sync pulled the tombstone. Found in Codex review.
+- **The MangaRead importer is off the roadmap.** Site bookmark import is paused with no
+  site planned. The research stays in `docs/mangaread-bookmark-import-plan.md`.
+
 ### Removed before release
 - **The NatoManga scraper.** Gone: **Save bookmarks**, **Refresh updates**, the
   series-page metadata pass, and the service worker's import job (`background.js` is back
