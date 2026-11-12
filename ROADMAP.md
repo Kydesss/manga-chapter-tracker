@@ -32,13 +32,13 @@ grows into a small cross-platform service.
   validated cross-device), the Shiori brand + design system (v0.3.x), and **v0.4.0**
   (2026-11-12): the full-page library, Plan to read (synced), browser-bookmark import,
   account isolation, and cloud schema v2 (server change order for the sync cursor, a
-  synced progress reset marker). See the [changelog](./CHANGELOG.md).
-- **Since v0.4.0 (unreleased):** the small fixes (popup Undo, a save shortcut, parser URL
-  variants, the popup footer's width), and **Settings with custom sites**
-  (`feat/custom-sites`): add any site by address and URL patterns
-  ([custom-sites-plan.md](./docs/custom-sites-plan.md)).
-- **Next:** the rest of Settings (account and sync, data import/export moved from the
-  popup) and save reminders (Bundle B). Site bookmark import is paused with no site
+  synced progress reset marker), and **v0.5.0** (2026-11-12): Settings with custom sites
+  (add any site by address and URL patterns,
+  [custom-sites-plan.md](./docs/custom-sites-plan.md)), a save shortcut, popup Undo, and
+  more chapter URLs. See the [changelog](./CHANGELOG.md).
+- **Next:** sync hardening (the popup's Save checking for an account switch, Set current
+  chapter on the library page, the concurrent-upload race), then save reminders (the rest
+  of Bundle B) and the rest of Settings. Site bookmark import is paused with no site
   planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) built in, plus
   any site you add in Settings whose chapter URLs carry the series and chapter number.
@@ -165,13 +165,13 @@ bookmarks in v1, with a preview).
 
 ---
 
-## Bundle B: User extensibility (tentative v0.5)
+## Bundle B: User extensibility (v0.5: custom sites shipped)
 
 **Shared foundation:** the Settings surface (from Bundle A) plus a content script
 injected on chapter pages. Both features below need exactly this, so the content-script
 and settings plumbing is built once.
 
-- **Custom sites / connectors (phase 1). Done (`feat/custom-sites`):** path patterns
+- **Custom sites / connectors (phase 1). Shipped in v0.5.0:** path patterns
   with `{slug}`, `{chapter}` and `*`, synced through `chrome.storage.sync`, no content
   script or permission needed. Later: chapter numbers in query strings, rewriting stored
   links when a site you added moves. Original plan: in Settings, add a site by host + a URL

@@ -402,6 +402,32 @@ decisions.
 
 ---
 
+## 18. v0.5.0: letting readers bring their own sites
+
+Every site Shiori knew was written into its parser, and NatoManga's move to a new domain
+showed the cost: a code release and a storage migration for a URL change. v0.5.0 turned
+the parser into a list of sites, built-in and user-added, run through one matcher. A
+reader adds a site with its address and two path patterns, checking them against a real
+link before saving.
+
+The design kept two promises from earlier releases. A pattern is never treated as regex,
+so nothing a reader types (or that arrives from another browser) can hang the popup. And
+a custom site can never claim a built-in site's address or id: records are keyed by site
+and series, so a site posing as MangaRead could have written over someone's real
+progress. Codex found that second hole by syncing a crafted definition, which is why
+every stored site is now re-checked on read rather than trusted because the form once
+accepted it. The same review found that Chrome's 8 KB sync item limit would have capped
+the feature at about 17 sites, quietly: storage moved to one item per site.
+
+Smaller polish rode along: a keyboard shortcut that saves without ever moving a series
+back, Undo in the popup, and page-numbered chapter URLs.
+
+**Why it mattered.** Extensibility moved the trust boundary. Settings that sync between
+browsers are input like any other, and "the form validated it" is not the same as "it's
+safe to use".
+
+---
+
 ## Threads to draw out in the case study
 
 - The reframe from "track bookmarks" to "never lose my place."
