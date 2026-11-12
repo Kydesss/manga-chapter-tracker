@@ -11,9 +11,29 @@ extension's `manifest.json` version field.
 ## [Unreleased]
 
 Jonah's `autoscraper` branch, targeting 0.4.0. It's not released yet: `manifest.json`
-stays at 0.3.3 until the import has been tested live with a signed-in NatoManga
-account. The design, phased plan, and pre-merge review are in
-[docs/natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md).
+stays at 0.3.3. The NatoManga bookmark scraper this branch added has since been removed
+again, before any release; see **Removed before release** below. The entries after it
+record what the branch built. What remains from them is Plan to read, real titles
+through saves and sync, storage schema v3/v4, the storage lock, the sync and merge
+fixes, and the JSON import fixes. The importer's design and pre-merge review stay in
+[docs/natomanga-bookmark-import-plan.md](./docs/natomanga-bookmark-import-plan.md) for
+reference.
+
+### Removed before release
+- **The NatoManga scraper.** Gone: **Save bookmarks**, **Refresh updates**, the
+  series-page metadata pass, and the service worker's import job (`background.js` is back
+  to running sign-in only). `natomanga.js`, its fixtures, and its tests are deleted.
+  Saving a chapter from a NatoManga chapter page still works, exactly as in 0.3.3.
+- **Covers and update badges** in the library, which only the scraper filled in. Rows
+  are back to 56px. The schema keeps the `coverUrl` and `latestChapter*` fields, so
+  libraries already migrated to v4 keep working, and those fields are simply unused.
+- **`bulkUpsert`**, the scraper's storage write path. The JSON backup import is
+  unchanged.
+- **Permissions:** `scripting`, `declarativeNetRequestWithHostAccess`, the
+  `*.2xstorage.com` host permission, and the cover-image referrer rule. The manifest
+  matches 0.3.3 again.
+- A leftover import job in `chrome.storage.local` is cleared on install or update.
+- Tests: 58 → 31 (the scraper, import-job, manifest-rule, and bulk-import tests).
 
 ### Added
 - **NatoManga bookmark import ("Save bookmarks").** On any natomanga.com page, the popup

@@ -73,12 +73,18 @@ fixtures. That answers most of these questions and becomes the test suite.
 
 ## Approach
 
-### Step 0: generalize the NatoManga plumbing (prerequisite)
+### Step 0: build the shared importer (prerequisite)
 
-The branch hard-codes NatoManga at every layer. It has `import-natomanga-bookmarks` and
-`get-natomanga-import-state` messages, a `natomangaImportJob` storage key,
-`natoImportBtn`/`natoImportStatus` in the popup, and NatoManga wording in
-`background.js`'s errors. Before adding a second site:
+> **Changed 2026-11-11:** the NatoManga importer this step was written to generalize was
+> removed before release. There's no import job, `bulkUpsert`, or `natomanga.js` in the
+> tree now. Either restore them from git history (before the "Remove the scraper for
+> Natomanga" commit) and generalize them as below, or build the shared pieces fresh. The
+> notes on the removed code below describe what to restore or reimplement.
+
+The removed importer hard-coded NatoManga at every layer. It had
+`import-natomanga-bookmarks` and `get-natomanga-import-state` messages, a
+`natomangaImportJob` storage key, `natoImportBtn`/`natoImportStatus` in the popup, and
+NatoManga wording in `background.js`'s errors. Before adding a site:
 
 - Define a bookmark adapter interface, roughly:
 
@@ -97,21 +103,22 @@ The branch hard-codes NatoManga at every layer. It has `import-natomanga-bookmar
   `import-bookmarks`/`get-import-state` messages and one `importJob` record that names
   its site.
 - Show one **Save bookmarks** button on any site that has an adapter.
-- Move NatoManga behind the interface with no behavior change. Its tests should pass
-  unchanged.
+- If NatoManga comes back, put it behind the interface. Its old tests (in history) are a
+  good regression suite.
 
 ### Step 1: a Madara adapter, configured for MangaRead
 
 Write `madara.js` with pure parsing of the bookmark table (and the history page, if
 that's where progress lives), with its selectors in one place. Add a MangaRead config
-with host, site id, and display name. Move the HTML-walking helpers from `natomanga.js`
-into a shared module rather than copying them, or settle the parsing decision below
-first.
+with host, site id, and display name. The HTML-walking helpers from the removed
+`natomanga.js` (in history) can seed a shared module, or settle the parsing decision
+below first.
 
 ### Step 2: the import
 
-Keep the NatoManga job's behavior: user-triggered, one request at a time, timeouts and
-backoff, per-page diagnostics, and each page saved with `bulkUpsert` as it arrives. Stop
+Match the removed NatoManga job's behavior: user-triggered, one request at a time,
+timeouts and backoff, per-page diagnostics, and each page saved with a forward-only bulk
+write (the removed `bulkUpsert`, restored or rebuilt) as it arrives. Stop
 at once when the tab closes, leaves the site, or is signed out, and run one sync pass
 afterward. When signed out from the start, show "Sign in to MangaRead in this tab, then
 try again."
