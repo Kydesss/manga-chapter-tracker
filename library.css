@@ -100,6 +100,11 @@ h1 {
   background: var(--danger);
 }
 
+.sync-dot.is-paused {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }

@@ -33,7 +33,7 @@ It started as a self-initiated UX project. The full problem definition, research
 
 To try it: open any chapter, for example `https://www.mangaread.org/manga/blue-lock/chapter-350/`, click the extension, and hit **Save chapter**. It appears in your library. Click it later to jump straight back. After you edit any file, return to `chrome://extensions` and click the reload icon on the extension card.
 
-Everything above works without an account. To also sync across devices, hit **Sign in** in the popup footer; setting up your own Google OAuth client and Supabase project is covered in [GOOGLE-SETUP.md](./GOOGLE-SETUP.md).
+Everything above works without an account. To also sync across devices, hit **Sign in** in the popup footer; setting up your own Google OAuth client and Supabase project is covered in [GOOGLE-SETUP.md](./GOOGLE-SETUP.md). A library syncs with one account: signing in as a different account pauses sync and asks whether to keep the two libraries separate or merge them.
 
 ## What each file does
 

@@ -32,13 +32,14 @@ grows into a small cross-platform service.
   validated cross-device), and the Shiori brand + design system (v0.3.x).
 - **On `master`, unreleased (targeting v0.4.0):** the `plan`/`reading` status,
   **Plan to read from a series page**, a shared forward-only bulk write (`bulkUpsert`),
-  storage schema v3-v5 (v5 moved NatoManga links to manganami.com), and storage/sync
-  fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
+  storage schema v3-v6 (v5 moved NatoManga links to manganami.com; v6 records the
+  library's owner), the full-page library, and storage/sync fixes. The NatoManga bookmark scraper (with covers, `+N` badges, and **Refresh
   updates**) was removed before release. See
   [Site bookmark import](#paused-site-bookmark-import).
-- **In progress:** Bundle A, part 1: the full-page library, on `feature/library-page`.
-  Design: [library-page-plan.md](./docs/library-page-plan.md). Then Settings and
-  browser-bookmark import. Site bookmark import is paused with no site planned.
+- **In progress:** account isolation (Sync hardening), on `fix/account-isolation`.
+  Next in Bundle A: Settings and browser-bookmark import, on top of the full-page library
+  ([library-page-plan.md](./docs/library-page-plan.md)). Site bookmark import is paused
+  with no site planned.
 - **Supported sites:** mangaread.org and NatoManga (now at manganami.com) for saving
   chapters and series.
 - **Surfaces:** Chrome extension.
@@ -262,12 +263,9 @@ Deferred from the v0.2 cloud-sync release (see `docs/cloud-sync-design.md`), plu
 found in later reviews. The first two are real data problems, found in the Codex review of
 the library page (PR 6); they predate it.
 
-- **Account isolation (do next).** There is no library-owner check today, despite earlier
-  docs claiming v0.2 guards against cross-account merging. Signing out keeps the local
-  library and sync cursor, so signing in as a different Google account pushes the first
-  account's series into the second's cloud (RLS can't stop it: the push is legitimately
-  the second account's). Fix: persist the library's owner, check it before any pull or
-  push, and handle account switching explicitly (scope the cursor and library per account).
+- **Account isolation (in progress, `fix/account-isolation`).** The library records its
+  owner; a different account pauses sync and the popup offers Keep separate (libraries
+  parked per account) or Merge. See Invariant 5 in `docs/cloud-sync-design.md`.
 - **Server change order for the sync cursor.** The incremental-pull cursor is built from
   `updated_at`, which devices set from their own clocks. One record stamped ahead of real
   time (a device with a fast clock) moves the cursor ahead, and later changes from other
@@ -275,8 +273,9 @@ the library page (PR 6); they predate it.
   (a sequence or `now()` on write) for the cursor, keeping `updated_at` for conflict
   resolution. Needs a cloud migration; do it with the ones below.
 - Tombstone purge (hard-delete old soft-deletes).
-- Full multi-account handling (switching between accounts on one device; see account
-  isolation above).
+- Fuller multi-account handling beyond Keep separate: a way to see or export a parked
+  library without signing in as its account, and to recover a library whose owner was
+  unknown at upgrade.
 - "Resolved N differences" indicator after a conflict.
 - "Set current chapter" override to intentionally move to an earlier chapter. The v0.3.3
   "Go to chapter X" button is the read-only half of this; deliberately moving the saved

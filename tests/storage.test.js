@@ -57,7 +57,7 @@ test("schema migration preserves legacy data, adds v3 fields, and backfills last
   const migrated = data.series[legacy.id];
 
   assert.deepEqual(result, { migrated: 1 });
-  assert.equal(data.schemaVersion, 5);
+  assert.equal(data.schemaVersion, 6);
   for (const [key, value] of Object.entries(legacy)) {
     if (key === "chapterUrl" || key === "seriesUrl") continue; // v5 moves the domain
     assert.deepEqual(migrated[key], value, `${key} should be preserved`);
@@ -271,7 +271,7 @@ test("v4 migration backfills lastReadAt only where it was never recorded", async
   data.series = { a: legacy, b: imported, c: plan };
 
   assert.deepEqual(await migrate(), { migrated: 1 });
-  assert.equal(data.schemaVersion, 5);
+  assert.equal(data.schemaVersion, 6);
   assert.equal(data.series.a.lastReadAt, "2026-07-01T00:00:00.000Z");
   assert.equal(data.series.b.lastReadAt, "2026-09-22T12:00:00.000Z");
   assert.equal(data.series.c.lastReadAt, null);

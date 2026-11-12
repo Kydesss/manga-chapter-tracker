@@ -8,7 +8,7 @@
 // yet, because sync's furthest-chapter rule would undo a backward move (see the
 // plan's "Why Set current chapter is deferred").
 
-import { migrate, getAll, remove, restore } from "./storage.js";
+import { migrate, getLibrary, remove, restore, OWNER_KEY } from "./storage.js";
 import { getSession, getUserEmail, SESSION_KEY } from "./auth.js";
 import { syncNow } from "./sync.js";
 import {
@@ -44,13 +44,14 @@ const OVERSCAN = 6;
 const TOAST_MS = 2500; // plain confirmations only; Undo never times out
 
 let allRecords = [];
+let libraryEpoch; // which library allRecords came from (storage.js getLibrary)
 let rows = []; // the current filtered + sorted view, which we virtualize
 let status = "all";
 
 // --- Data ------------------------------------------------------------------
 
 async function load({ keepScroll = false } = {}) {
-  allRecords = await getAll();
+  ({ records: allRecords, epoch: libraryEpoch } = await getLibrary());
   refreshSiteOptions();
   render({ keepScroll });
 }
@@ -201,7 +202,8 @@ function renderRow(r, index) {
   del.title = "Remove from library";
   del.setAttribute("aria-label", `Remove ${r.title} from library`);
   // detail is 0 for a click synthesized from Enter/Space, the click count for a mouse.
-  del.addEventListener("click", (e) => removeSeries(r, { fromKeyboard: e.detail === 0 }));
+  const epoch = libraryEpoch; // the library this row was drawn from
+  del.addEventListener("click", (e) => removeSeries(r, { fromKeyboard: e.detail === 0, epoch }));
   actions.append(del);
 
   row.append(main, actions);
@@ -231,8 +233,14 @@ function wireOpen(btn, url) {
 // `fromKeyboard`: the remove button was activated with Enter/Space. Its row is
 // gone after the reload, so focus moves to Undo instead of falling back to the
 // page, where a keyboard user couldn't reach Undo before it expires.
-async function removeSeries(r, { fromKeyboard = false } = {}) {
-  const previous = await remove(r.id); // the series exactly as it was
+async function removeSeries(r, { fromKeyboard = false, epoch } = {}) {
+  const previous = await remove(r.id, { epoch }); // the series exactly as it was
+  if (previous === false) {
+    // This row was from a library that has since been switched out.
+    await load({ keepScroll: true });
+    showToast("The library changed; nothing was removed");
+    return;
+  }
   await load({ keepScroll: true });
   showToast(`Removed ${r.title}`, {
     label: "Undo",
@@ -240,7 +248,13 @@ async function removeSeries(r, { fromKeyboard = false } = {}) {
     run: async () => {
       const restored = await restore(r.id, previous);
       await load({ keepScroll: true });
-      showToast(restored ? `Restored ${r.title}` : `${r.title} was already back`);
+      showToast(
+        restored === false
+          ? "Can't undo: the library was switched"
+          : restored
+            ? `Restored ${r.title}`
+            : `${r.title} was already back`
+      );
       focusRow(r.id) || searchInput.focus();
       runSync();
     },
@@ -306,6 +320,8 @@ function setSyncState(state, email = null) {
         ? "Syncing..."
         : state === "offline"
           ? "Offline, will sync later"
+          : state === "paused"
+            ? "Sync paused: choose an account in the toolbar popup"
           : email
             ? `Synced: ${email}`
             : "Synced";
@@ -349,7 +365,11 @@ async function runSync(opts = {}) {
   // refresh); the run that change triggered reports.
   if (now.user?.id !== session.user?.id) return;
   const email = getUserEmail(now);
-  if (res?.ok) {
+  if (res?.skipped === "account-mismatch") {
+    syncGate.shown(seq);
+    syncState = "paused";
+    setSyncState("paused");
+  } else if (res?.ok) {
     syncGate.shown(seq);
     syncState = "synced";
     setSyncState("synced", email);
@@ -397,7 +417,10 @@ window.addEventListener("resize", debounce(() => render({ keepScroll: true }), 1
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.series) reloadSoon();
-  if (changes[SESSION_KEY]) runSync();
+  // Signing in or out, or choosing an account in the popup's prompt.
+  if (changes[SESSION_KEY] || changes[OWNER_KEY]) runSync();
+  // A switch or merge replaced the library: a pending Undo no longer applies.
+  if (changes[OWNER_KEY] && !toastDismiss.hidden && !toastEl.hidden) hideToast();
 });
 const reloadSoon = debounce(() => load({ keepScroll: true }), 150);
 

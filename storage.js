@@ -14,16 +14,30 @@
 
 import { resolveConflict, pickTitle, hasChapter, chapterToNumber, sameSyncContent } from "./merge.js";
 import { upgradeSiteUrl } from "./parser.js";
+import { SESSION_KEY } from "./auth.js";
 
 const KEY = "series"; // { [id]: record }
 const SCHEMA_KEY = "schemaVersion";
 const CURSOR_KEY = "lastSyncCursor"; // server timestamp of the last pulled change
 const SNAPSHOT_KEY = "preSyncSnapshot"; // safety backup before first-ever sync
+// Whose library this is: { id, email } of the account it syncs with, or
+// { unknown: true } for a library that synced before owners were recorded.
+// Absent until the first sync claims it. See "Account ownership" below.
+export const OWNER_KEY = "libraryOwner";
+// Libraries set aside when another account took over this device, by owner id:
+// { [id]: { owner, series, cursor, parkedAt } }. Restored when that account
+// signs in again.
+const PARKED_KEY = "parkedLibraries";
+// Changes whenever a switch or merge replaces the active library. remove()
+// tags what it returns with it, so an Undo held across a switch can't put one
+// account's series into another account's library.
+const EPOCH_KEY = "libraryEpoch";
+const LIBRARY = Symbol("library");
 const LOCK_NAME = "shiori-library";
 
 // 2 = sync fields; 3 = status + series metadata fields; 4 = lastReadAt backfill;
-// 5 = links moved off a site's old domain
-const CURRENT_SCHEMA = 5;
+// 5 = links moved off a site's old domain; 6 = library owner recorded
+const CURRENT_SCHEMA = 6;
 
 const URL_FIELDS = ["chapterUrl", "seriesUrl", "latestChapterUrl"];
 
@@ -109,6 +123,10 @@ function keepKnownMetadata(incoming, existing) {
 //       www.manganami.com). Same paths, so the chapter is unchanged. Not a
 //       user edit: updatedAt and dirty stay as they were, and sync rewrites
 //       old links it pulls the same way (sync.js fromRow).
+//   v6: record the owner of a library that has synced before. Signed in at
+//       upgrade: that account (switching accounts takes a sign-out and a
+//       sign-in, so the current session is the one that has been syncing).
+//       Signed out: unknown, and the next sign-in asks before syncing.
 export async function migrate() {
   return withLibraryLock(async () => {
     const { [SCHEMA_KEY]: version } = await chrome.storage.local.get(SCHEMA_KEY);
@@ -140,6 +158,7 @@ export async function migrate() {
       }
     }
     await writeMap(map);
+    if (from < 6) await recordLegacyOwner();
     await chrome.storage.local.set({ [SCHEMA_KEY]: CURRENT_SCHEMA });
     return { migrated };
   });
@@ -161,6 +180,15 @@ function needsFieldBackfill(r) {
 export async function getAll() {
   const map = await readMap();
   return Object.values(map).filter((r) => !r.deleted);
+}
+
+// The visible library plus the epoch it belongs to, read together. Pages that
+// let you act on a row hand the epoch back (remove), so a row still on screen
+// from before a switch can't change the library that replaced it.
+export async function getLibrary() {
+  const r = await chrome.storage.local.get([KEY, EPOCH_KEY]);
+  const records = Object.values(r[KEY] || {}).filter((x) => !x.deleted);
+  return { records, epoch: r[EPOCH_KEY] || "initial" };
 }
 
 // Everything including tombstones. Used by the sync engine.
@@ -446,8 +474,11 @@ function sameImportSyncContent(a, b) {
 // tombstones out, so this looks like a normal removal. Returns the series as it
 // was just before (read under the same lock), so an Undo can bring back exactly
 // that; null if there was nothing to remove.
-export async function remove(id) {
+// `epoch` (from getLibrary): the library the caller was showing. If a switch
+// or merge has replaced it since, nothing is removed and this returns false.
+export async function remove(id, { epoch } = {}) {
   return withLibraryLock(async () => {
+    if (epoch !== undefined && epoch !== (await readEpoch())) return false;
     const map = await readMap();
     const existing = map[id];
     if (!existing) return null;
@@ -455,8 +486,18 @@ export async function remove(id) {
     // this device's clock, and a remove that sorted before it would lose.
     map[id] = { ...existing, deleted: true, dirty: true, updatedAt: laterThan(existing.updatedAt) };
     await writeMap(map);
-    return existing;
+    // Non-enumerable: invisible to spreads, storage, and comparisons.
+    return Object.defineProperty({ ...existing }, LIBRARY, { value: await readEpoch() });
   });
+}
+
+async function readEpoch() {
+  const { [EPOCH_KEY]: epoch } = await chrome.storage.local.get(EPOCH_KEY);
+  return epoch || "initial";
+}
+
+function newEpoch() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 // `wanted`, unless that would sort at or before `prior`: then just after `prior`.
@@ -484,9 +525,14 @@ function laterThan(iso) {
 // strictly newer than the current record, so it wins wherever that synced, and
 // under the merge rule a resurrecting save restarts from itself.
 // Returns the series as it now stands, or null when there's nothing to restore
-// (no record, or a live one and no `previous` to merge).
+// (no record, or a live one and no `previous` to merge), or false when the
+// active library was switched or merged since the remove: that Undo belongs to
+// a library that isn't here any more.
 export async function restore(id, previous = null) {
   return withLibraryLock(async () => {
+    if (previous?.[LIBRARY] !== undefined && previous[LIBRARY] !== (await readEpoch())) {
+      return false;
+    }
     const map = await readMap();
     const current = map[id];
     if (!current) return null;
@@ -565,6 +611,160 @@ export async function writeSafetySnapshot() {
   await chrome.storage.local.set({
     [SNAPSHOT_KEY]: { takenAt: nowISO(), records },
   });
+}
+
+// --- Account ownership ----------------------------------------------------
+//
+// A library syncs with one account. Signing out keeps it on the device, usable
+// offline. Signing in as a different account must never push it into that
+// account's cloud by accident: the sync engine checks the owner first
+// (ensureOwner) and pauses until the user chooses (switchLibrary or
+// adoptLibrary). The callers in sync.js hold the sync lock, so a pass never
+// runs halfway through an ownership change.
+
+async function readOwnerState() {
+  const r = await chrome.storage.local.get([OWNER_KEY, CURSOR_KEY, EPOCH_KEY]);
+  return { owner: r[OWNER_KEY] || null, cursor: r[CURSOR_KEY] || null, epoch: r[EPOCH_KEY] || "initial" };
+}
+
+export async function getOwner() {
+  return (await readOwnerState()).owner;
+}
+
+async function recordLegacyOwner() {
+  const r = await chrome.storage.local.get([OWNER_KEY, CURSOR_KEY, SESSION_KEY]);
+  if (r[OWNER_KEY] || !r[CURSOR_KEY]) return;
+  const user = r[SESSION_KEY]?.user;
+  const owner = user?.id ? ownerOf(user) : { unknown: true };
+  await chrome.storage.local.set({ [OWNER_KEY]: owner });
+}
+
+// How this library relates to the signed-in user:
+//   "match"    - it's theirs.
+//   "claim"    - unowned and never synced: the first sync makes it theirs
+//                (a merge, never a replace; cloud-sync-design Invariant 2).
+//   "switch"   - another account's, but with no series in it: set it aside
+//                without asking.
+//   "mismatch" - another account's (or an unknown one's) with series in it:
+//                ask before syncing anything.
+function classifyOwner({ owner, cursor }, map, user) {
+  if (owner?.id && owner.id === user.id) return "match";
+  if (!owner && !cursor) return "claim";
+  const hasSeries = Object.values(map).some((r) => !r.deleted);
+  return hasSeries ? "mismatch" : "switch";
+}
+
+// Read-only version of the check, for showing status without syncing.
+export async function ownerStatus(user) {
+  const state = await readOwnerState();
+  const status = classifyOwner(state, await readMap(), user);
+  return { status, owner: state.owner || { unknown: true }, epoch: state.epoch };
+}
+
+// The check a sync pass runs before touching the cloud. Claims an unowned
+// library and switches away from an empty one; otherwise reports a mismatch.
+// Returns { ok: true } when the pass may continue, or { ok: false, owner }.
+export async function ensureOwner(user) {
+  return withLibraryLock(async () => {
+    const state = await readOwnerState();
+    const map = await readMap();
+    const status = classifyOwner(state, map, user);
+    if (status === "mismatch") {
+      return { ok: false, owner: state.owner || { unknown: true }, epoch: state.epoch };
+    }
+    if (status === "switch") {
+      await swapLibrary(state, map, user);
+    } else if (status === "claim" || state.owner.email !== (user.email || null)) {
+      await chrome.storage.local.set({ [OWNER_KEY]: ownerOf(user) });
+    }
+    return { ok: true, claimed: status === "claim", switched: status === "switch" };
+  });
+}
+
+// "Keep separate": set the current library aside under its owner and load the
+// signed-in account's (its own set-aside library, or an empty one that the
+// next sync fills from its cloud). Not offered for an unknown owner, whose
+// set-aside library no sign-in would ever bring back.
+// `epoch`: the library the user was asked about; refused if it has changed.
+export async function switchLibrary(user, { epoch } = {}) {
+  return withLibraryLock(async () => {
+    const state = await readOwnerState();
+    if (epoch !== undefined && epoch !== state.epoch) return { switched: false, stale: true };
+    if (!state.owner?.id) {
+      throw new Error("This library's account is unknown, so it can't be set aside.");
+    }
+    if (state.owner.id === user.id) return { switched: false };
+    await swapLibrary(state, await readMap(), user);
+    return { switched: true };
+  });
+}
+
+// "Merge": the user chose to add this library to the signed-in account. The
+// cursor resets, so the next sync is a first sync for that account: pull all of
+// its cloud, merge, push everything. Removed series are dropped first: merging
+// adds what you're reading; it doesn't replay the other account's removals.
+// If this account has a library parked on this device, it's folded in too
+// (with its own removals), so its unsynced changes aren't stranded.
+export async function adoptLibrary(user, { epoch } = {}) {
+  return withLibraryLock(async () => {
+    if (epoch !== undefined && epoch !== (await readEpoch())) return { adopted: 0, stale: true };
+    const map = await readMap();
+    for (const id of Object.keys(map)) if (map[id].deleted) delete map[id];
+    const { [PARKED_KEY]: stored } = await chrome.storage.local.get(PARKED_KEY);
+    const parked = { ...(stored || {}) };
+    const mine = parked[user.id];
+    delete parked[user.id];
+    const next = mine ? mergeMaps(mine.series || {}, map) : map;
+    // One write, so an interruption can't leave a half-finished merge.
+    await chrome.storage.local.set({
+      [KEY]: next,
+      [PARKED_KEY]: parked,
+      [OWNER_KEY]: ownerOf(user),
+      [CURSOR_KEY]: null,
+      [EPOCH_KEY]: newEpoch(),
+    });
+    return { adopted: Object.keys(next).length };
+  });
+}
+
+function ownerOf(user) {
+  return { id: user.id, email: user.email || null };
+}
+
+// Runs under the library lock. Parks the current library (series and cursor)
+// under its owner and brings back the user's parked one, if any.
+async function swapLibrary(state, map, user) {
+  const { [PARKED_KEY]: stored } = await chrome.storage.local.get(PARKED_KEY);
+  const parked = { ...(stored || {}) };
+  const key = state.owner?.id || "unknown";
+  const previous = parked[key];
+  parked[key] = {
+    owner: state.owner || { unknown: true },
+    // Never overwrite a library already parked under this key: keep both.
+    series: previous ? mergeMaps(previous.series || {}, map) : map,
+    cursor: previous ? null : state.cursor,
+    parkedAt: nowISO(),
+  };
+  const mine = parked[user.id];
+  delete parked[user.id];
+  // One write (chrome.storage applies a set call as a unit): an interruption
+  // can't erase a library before it's parked, or pair one account's library
+  // with another's cursor.
+  await chrome.storage.local.set({
+    [KEY]: mine?.series || {},
+    [PARKED_KEY]: parked,
+    [OWNER_KEY]: ownerOf(user),
+    [CURSOR_KEY]: mine?.cursor || null,
+    [EPOCH_KEY]: newEpoch(),
+  });
+}
+
+function mergeMaps(a, b) {
+  const out = { ...a };
+  for (const [id, rec] of Object.entries(b)) {
+    out[id] = out[id] ? resolveConflict(out[id], rec) : rec;
+  }
+  return out;
 }
 
 // --- Import ---------------------------------------------------------------
