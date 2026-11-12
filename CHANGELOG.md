@@ -35,10 +35,11 @@ reference.
   stay removed unless the caller passes `restoreDeleted: true`, and are counted as
   `removed`. When duplicates collapse, the furthest chapter wins but a real title and
   known metadata are kept from any duplicate, and a numbered chapter beats a label like
-  "Extra". Only a numbered chapter advances a series, a planned one included. A chapter
-  without a usable http(s) link counts as no chapter: it never replaces a working link,
-  and a new series sent that way arrives as Plan to read. Nothing calls it yet.
-- Tests: 31 → 54 (series parsing, the plan-save guard, `bulkUpsert`, and resurrection).
+  "Extra". An imported chapter only counts if it's a number with a usable http(s) link;
+  anything else ("Extra", a missing or unsafe link) counts as no chapter. It never
+  replaces a working link or advances a series, and a new or restored series sent that
+  way arrives as Plan to read, so it can still advance later. Nothing calls it yet.
+- Tests: 31 → 55 (series parsing, the plan-save guard, `bulkUpsert`, and resurrection).
 
 ### Changed since the removal
 - **Merge rule: a resurrection restarts the series.** When a newer save brings back a

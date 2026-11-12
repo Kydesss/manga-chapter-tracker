@@ -583,6 +583,26 @@ test("an unrankable label never starts reading a planned series", async () => {
   assert.equal(data.series[planned.id].chapter, "10");
 });
 
+test("a new or restored series at an unrankable label arrives as Plan to read, and can still advance", async () => {
+  data.schemaVersion = 4;
+  const removed = stored({ id: "r", chapter: "3", deleted: true });
+  data.series = { r: structuredClone(removed) };
+
+  await bulkUpsert(
+    [stored({ id: "n", chapter: "Extra" }), stored({ id: "r", chapter: "Omake" })],
+    { timestamp: T, restoreDeleted: true }
+  );
+  for (const id of ["n", "r"]) {
+    assert.equal(data.series[id].status, "plan", id);
+    assert.equal(data.series[id].chapter, null, id);
+    assert.equal(data.series[id].deleted, false, id);
+  }
+
+  await bulkUpsert([stored({ id: "n", chapter: "10" })], { timestamp: T });
+  assert.equal(data.series.n.status, "reading");
+  assert.equal(data.series.n.chapter, "10");
+});
+
 test("bulk import dedupe prefers a numbered chapter over an unrankable label", async () => {
   data.schemaVersion = 4;
   const planned = stored({ chapter: null, chapterUrl: null, status: "plan", lastReadAt: null });

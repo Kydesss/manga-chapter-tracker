@@ -201,12 +201,12 @@ export async function upsert(record) {
 // comes back) with a single read and write. Not tied to any site: callers hand
 // in parsed records. The rules:
 //   - Reading position only moves forward. An import can advance a series or
-//     start a Plan-to-read one, never move one back or blank it out. Chapter
-//     labels we can't rank ("Extra") never advance anything, planned series
-//     included.
-//   - A chapter only counts with a usable http(s) link. Without one it's
-//     treated as no chapter: it can't replace a working link, and a new series
-//     arrives as Plan to read (sync can't push a chapter without its link).
+//     start a Plan-to-read one, never move one back or blank it out.
+//   - An imported chapter only counts if it's a number with a usable http(s)
+//     link. Anything else ("Extra", a missing or unsafe link) is treated as no
+//     chapter: it never replaces a working link or advances a series, and a new
+//     or restored series arrives as Plan to read. A stored "Extra" could never
+//     be advanced past, and sync can't push a chapter without its link.
 //   - Duplicates within one import collapse to the furthest chapter.
 //   - A series the user removed stays removed unless `restoreDeleted` is set.
 //   - Unknown (null) metadata never erases what we already know, and an
@@ -324,10 +324,8 @@ function normalizeImportedRecord(record, timestamp, existingCreatedAt) {
 // its URL travel together, while a real title and any known metadata are kept
 // from whichever duplicate had them.
 function preferFurtherRecord(a, b) {
-  const ra = chapterRank(a);
-  const rb = chapterRank(b);
   let winner = a;
-  if (rb > ra || (rb === 2 && ra === 2 && compareChapterProgress(b.chapter, a.chapter) > 0)) {
+  if (hasChapter(b.chapter) && (!hasChapter(a.chapter) || compareChapterProgress(b.chapter, a.chapter) > 0)) {
     winner = b;
   }
   const other = winner === a ? b : a;
@@ -340,18 +338,11 @@ function preferFurtherRecord(a, b) {
   };
 }
 
-// How much a duplicate's chapter is worth when collapsing: a numbered chapter
-// beats an unrankable label ("Extra"), which beats no chapter at all.
-function chapterRank(r) {
-  if (!hasChapter(r.chapter)) return 0;
-  return chapterToNumber(r.chapter) === null ? 1 : 2;
-}
-
-// An imported chapter only counts with a link we can open (and sync can push).
-// Without one, the record is treated as having no chapter.
+// An imported chapter only counts if we can rank it (a number) and open it (an
+// http(s) link, which sync also needs). Otherwise the record is treated as
+// having no chapter, so it can only add or enrich a Plan-to-read series.
 function withUsableChapter(record) {
-  if (!hasChapter(record.chapter)) return { ...record, chapter: null, chapterUrl: null };
-  if (isHttpUrl(record.chapterUrl)) return record;
+  if (chapterToNumber(record.chapter) !== null && isHttpUrl(record.chapterUrl)) return record;
   return { ...record, chapter: null, chapterUrl: null, lastReadAt: null };
 }
 
