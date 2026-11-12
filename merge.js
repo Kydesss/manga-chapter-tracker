@@ -5,7 +5,9 @@
 // data-safety rules be verified in isolation.
 //
 // Conflict rule (single source of truth, mirrors docs/cloud-sync-design.md):
-//   1. Deletion resolves first, by recency (newer updatedAt wins).
+//   1. Deletion resolves first, by recency (newer updatedAt wins). When a newer
+//      save resurrects a deleted series, the series restarts from that save:
+//      the tombstone's old chapter doesn't count toward rule 2.
 //   2. Reading position is monotonic: the FURTHEST chapter wins, independent of
 //      which side was written more recently. A stale device can never move you
 //      back. A record with a chapter always beats one without ("reading
@@ -77,7 +79,12 @@ export function resolveConflict(local, remote) {
 
   // 2. Furthest chapter wins (only meaningful if not deleted).
   let chapterSource = newer;
-  if (!deleted) {
+  if (!deleted && older.deleted === true) {
+    // A newer save brought a deleted series back. The deletion ended the old
+    // reading history, so the tombstone's chapter doesn't compete: the series
+    // restarts from the resurrecting save (which may be Plan to read).
+    chapterSource = newer;
+  } else if (!deleted) {
     const lHas = hasChapter(local.chapter);
     const rHas = hasChapter(remote.chapter);
     if (lHas !== rHas) {

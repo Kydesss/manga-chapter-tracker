@@ -315,10 +315,22 @@ function normalizeImportedRecord(record, timestamp, existingCreatedAt) {
   };
 }
 
+// Collapse two imported records for the same series: the furthest chapter and
+// its URL travel together, while a real title and any known metadata are kept
+// from whichever duplicate had them.
 function preferFurtherRecord(a, b) {
-  if (!hasChapter(b.chapter)) return a;
-  if (!hasChapter(a.chapter)) return b;
-  return compareChapterProgress(b.chapter, a.chapter) > 0 ? b : a;
+  let winner = a;
+  if (hasChapter(b.chapter) && (!hasChapter(a.chapter) || compareChapterProgress(b.chapter, a.chapter) > 0)) {
+    winner = b;
+  }
+  const other = winner === a ? b : a;
+  return {
+    ...winner,
+    title: pickTitle(winner, other),
+    siteName: winner.siteName || other.siteName,
+    lastReadAt: winner.lastReadAt ?? null,
+    ...keepKnownMetadata(winner, other),
+  };
 }
 
 // Compare two chapter labels: 1 if a is further, -1 if behind, 0 if equal.

@@ -427,6 +427,30 @@ test("bulk import dedupes to the furthest chapter and doesn't invent a read time
   assert.equal(rec.dirty, true);
 });
 
+test("bulk import dedupe keeps the furthest chapter and every duplicate's known details", async () => {
+  data.schemaVersion = 4;
+  data.series = {};
+
+  await bulkUpsert(
+    [
+      stored({
+        title: "Witch & Mercenary (Official)",
+        chapter: "8",
+        chapterUrl: "u8",
+        coverUrl: "https://cdn.example/cover.jpg",
+      }),
+      stored({ title: "Witch And Mercenary", chapter: "10", chapterUrl: "u10", coverUrl: null }),
+    ],
+    { timestamp: T }
+  );
+
+  const rec = Object.values(data.series)[0];
+  assert.equal(rec.chapter, "10");
+  assert.equal(rec.chapterUrl, "u10");
+  assert.equal(rec.title, "Witch & Mercenary (Official)");
+  assert.equal(rec.coverUrl, "https://cdn.example/cover.jpg");
+});
+
 test("bulk import advances a series but keeps its last known read time", async () => {
   data.schemaVersion = 4;
   const existing = stored({ chapter: "20", lastReadAt: "2026-08-01T00:00:00.000Z" });

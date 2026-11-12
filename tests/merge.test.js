@@ -68,6 +68,42 @@ test("newer edit resurrects over older deletion", () => {
   assert.equal(m.chapter, "60");
 });
 
+test("a resurrecting save restarts the series instead of reviving the tombstone's chapter", () => {
+  const tombstone = rec({ chapter: "40", deleted: true, updatedAt: "2026-05-01T00:00:00Z" });
+  const plan = rec({
+    chapter: null,
+    chapterUrl: null,
+    status: "plan",
+    deleted: false,
+    updatedAt: "2026-06-01T00:00:00Z",
+  });
+  for (const m of [resolveConflict(plan, tombstone), resolveConflict(tombstone, plan)]) {
+    assert.equal(m.deleted, false);
+    assert.equal(m.chapter, null);
+    assert.equal(m.status, "plan");
+  }
+
+  const restart = rec({ chapter: "3", updatedAt: "2026-06-01T00:00:00Z" });
+  assert.equal(resolveConflict(tombstone, restart).chapter, "3");
+});
+
+test("pulling an old tombstone doesn't turn a fresh plan back into reading", () => {
+  const local = {
+    "natomanga.com:foo": rec({
+      chapter: null,
+      chapterUrl: null,
+      status: "plan",
+      updatedAt: "2026-06-01T00:00:00Z",
+      dirty: true,
+    }),
+  };
+  const remote = [rec({ chapter: "40", deleted: true, updatedAt: "2026-05-01T00:00:00Z" })];
+  const merged = mergeRemoteIntoLocal(local, remote).next["natomanga.com:foo"];
+  assert.equal(merged.deleted, false);
+  assert.equal(merged.chapter, null);
+  assert.equal(merged.status, "plan");
+});
+
 test("createdAt keeps the earliest; updatedAt keeps the max", () => {
   const local = rec({ createdAt: "2026-02-01T00:00:00Z", updatedAt: "2026-05-01T00:00:00Z" });
   const remote = rec({ createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-06-01T00:00:00Z" });

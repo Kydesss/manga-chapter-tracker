@@ -161,7 +161,7 @@ This is the single source of truth for how conflicts resolve. Reading progress i
 
 When the same `id` exists on both sides, resolve field by field:
 
-- **Deletion (`deleted`): most recent action wins, by `updatedAt`.** Resolved first. Deletion is explicit and intentional, so recency is the right signal. A newer delete sticks; a newer re-save resurrects the series. If the winning state is deleted, the record is a tombstone and the chapter is moot.
+- **Deletion (`deleted`): most recent action wins, by `updatedAt`.** Resolved first. Deletion is explicit and intentional, so recency is the right signal. A newer delete sticks; a newer re-save resurrects the series. If the winning state is deleted, the record is a tombstone and the chapter is moot. A resurrection restarts the series from the re-save: the tombstone's old chapter doesn't compete under the furthest-chapter rule below (added 2026-11-12, so planning a removed series keeps it as Plan to read instead of reviving its old chapter).
 - **`chapter` (reading position): furthest chapter wins.** Parse both labels to numbers (handles decimals like `83.2`) and keep the higher one, independent of which record was written more recently. Example: local `120` updated three weeks ago beats cloud `100` updated yesterday, so you are never moved back. If a label cannot be parsed (should not happen given the parser), fall back to `updatedAt` so a bad value cannot blank out progress.
 - **Other fields (title, URLs): newer by `updatedAt` wins.** Cosmetic, recency is fine.
 - **`createdAt`: keep the earliest.**
