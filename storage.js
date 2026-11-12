@@ -12,7 +12,7 @@
 // popup and the service worker both write the library; without the lock, one
 // context's write could silently undo the other's.
 
-import { resolveConflict, pickTitle, hasChapter } from "./merge.js";
+import { resolveConflict, pickTitle, hasChapter, chapterToNumber } from "./merge.js";
 
 const KEY = "series"; // { [id]: record }
 const SCHEMA_KEY = "schemaVersion";
@@ -201,8 +201,12 @@ export async function upsert(record) {
 // comes back) with a single read and write. Not tied to any site: callers hand
 // in parsed records. The rules:
 //   - Reading position only moves forward. An import can advance a series or
-//     start a Plan-to-read one, never move one back or blank it out. Chapter
-//     labels we can't rank ("Extra") never advance anything.
+//     start a Plan-to-read one, never move one back or blank it out.
+//   - An imported chapter only counts if it's a number with a usable http(s)
+//     link. Anything else ("Extra", a missing or unsafe link) is treated as no
+//     chapter: it never replaces a working link or advances a series, and a new
+//     or restored series arrives as Plan to read. A stored "Extra" could never
+//     be advanced past, and sync can't push a chapter without its link.
 //   - Duplicates within one import collapse to the furthest chapter.
 //   - A series the user removed stays removed unless `restoreDeleted` is set.
 //   - Unknown (null) metadata never erases what we already know, and an
@@ -219,11 +223,12 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
     const deduped = new Map();
     let skipped = 0;
 
-    for (const record of records) {
-      if (!isImportableRecord(record)) {
+    for (const raw of records) {
+      if (!isImportableRecord(raw)) {
         skipped++;
         continue;
       }
+      const record = withUsableChapter(raw);
       const previous = deduped.get(record.id);
       deduped.set(record.id, previous ? preferFurtherRecord(previous, record) : record);
     }
@@ -247,7 +252,7 @@ export async function bulkUpsert(records, { timestamp = nowISO(), restoreDeleted
       }
 
       const shouldAdvance =
-        hasChapter(incoming.chapter) &&
+        chapterToNumber(incoming.chapter) !== null &&
         (!hasChapter(existing.chapter) ||
           compareChapterProgress(incoming.chapter, existing.chapter) > 0);
 
@@ -331,6 +336,24 @@ function preferFurtherRecord(a, b) {
     lastReadAt: winner.lastReadAt ?? null,
     ...keepKnownMetadata(winner, other),
   };
+}
+
+// An imported chapter only counts if we can rank it (a number) and open it (an
+// http(s) link, which sync also needs). Otherwise the record is treated as
+// having no chapter, so it can only add or enrich a Plan-to-read series.
+function withUsableChapter(record) {
+  if (chapterToNumber(record.chapter) !== null && isHttpUrl(record.chapterUrl)) return record;
+  return { ...record, chapter: null, chapterUrl: null, lastReadAt: null };
+}
+
+function isHttpUrl(raw) {
+  if (typeof raw !== "string") return false;
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 // Compare two chapter labels: 1 if a is further, -1 if behind, 0 if equal.

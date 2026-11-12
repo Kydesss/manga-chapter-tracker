@@ -261,6 +261,12 @@ daily use.
   "Go to chapter X" button is the read-only half of this; deliberately moving the saved
   position backward still means overwriting it from the chapter page. Site import raises
   the stakes: an import that misreads a page can only be undone this way.
+- **A deletion boundary that syncs.** Since v0.4, a save that resurrects a deleted series
+  restarts it, so the tombstone's old chapter doesn't win. But a device that never saw the
+  deletion still holds the old chapter, and merging it with the restart revives that
+  chapter for everyone (found in Codex review of PR #3). Fix: store when a series was
+  last deleted (or a restart generation) and sync it, so progress from before the
+  deletion never counts. Needs a cloud column; do it with the migration below.
 - **Plan to read in the cloud.** Make `chapter` nullable, and add `status` and the
   metadata columns to the Supabase table, so Plan-to-read records and
   covers/latest chapters sync. The merge rule it depends on, "a real chapter always
